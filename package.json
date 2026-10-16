@@ -1,0 +1,39 @@
+{
+  "name": "easy-claude",
+  "version": "0.1.0",
+  "description": "Claude Code subscription usage and transparent Claude desktop quota ring",
+  "type": "module",
+  "bin": {
+    "easy-claude": "bin/easy-claude.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "native/Overlay.swift",
+    "native/build/EasyClaudeOverlay.app",
+    "scripts/build-overlay.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node bin/easy-claude.js",
+    "build:overlay": "node scripts/build-overlay.mjs"
+  },
+  "license": "MIT",
+  "author": "UnionSchool",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UnionSchool/easy-claude.git"
+  },
+  "homepage": "https://github.com/UnionSchool/easy-claude#readme",
+  "bugs": {
+    "url": "https://github.com/UnionSchool/easy-claude/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

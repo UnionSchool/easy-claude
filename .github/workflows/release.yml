@@ -1,0 +1,33 @@
+name: Release npm package
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: macos-15
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/easy-claude
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Check release version
+        run: node --input-type=module -e "import p from './package.json' with {type:'json'}; if (process.env.GITHUB_REF_NAME !== 'v' + p.version) throw new Error('Tag and package version must match');"
+      - run: npm test
+      - run: npm run build:overlay
+      - run: npm pack --dry-run
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            npm publish --access public --provenance --tag next
+          else
+            npm publish --access public --provenance
+          fi
