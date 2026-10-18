@@ -188,8 +188,8 @@ func clockState(at date: Date, zone: TimeZone) -> RingState {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = zone
     let hour = calendar.component(.hour, from: date)
-    if hour >= 9 && hour < 15 { return .green }
-    if hour >= 15 { return .orange }
+    if hour >= 9 && hour < 18 { return .green }
+    if hour >= 18 { return .orange }
     return .red
 }
 
@@ -511,9 +511,12 @@ struct Main {
             precondition(clockText(at: winter, zone: singapore) == "20:00")
             precondition(TimeZone(identifier: "Invalid/Zone") == nil)
             let utc = TimeZone(secondsFromGMT: 0)!
-            for (hour, state) in [(0, RingState.red), (6, .red), (8, .red), (9, .green), (14, .green), (15, .orange), (23, .orange)] {
+            for (hour, state) in [(0, RingState.red), (6, .red), (8, .red), (9, .green), (14, .green), (15, .green), (17, .green), (18, .orange), (23, .orange)] {
                 let date = Date(timeIntervalSince1970: Double(hour * 3600))
                 precondition(clockState(at: date, zone: utc) == state)
+            }
+            for (seconds, state) in [(32399.0, RingState.red), (32400.0, .green), (64799.0, .green), (64800.0, .orange), (86400.0, .red)] {
+                precondition(clockState(at: Date(timeIntervalSince1970: seconds), zone: utc) == state)
             }
             precondition(clockState(at: winter, zone: la) == .red)
             precondition(clockState(at: winter, zone: singapore) == .orange)
@@ -529,6 +532,20 @@ struct Main {
             assert(ringOrigin(in: bounds, inset: CGPoint(x: -100, y: -100)) == CGPoint(x: 100, y: 100))
             assert(ringOrigin(in: bounds, inset: CGPoint(x: 9999, y: 9999)) == CGPoint(x: 868, y: 668))
             print("Swift 圆环颜色与窗口坐标检查通过")
+            return
+        }
+        if CommandLine.arguments.contains("--quit-running") {
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.unionschool.easy-claude.overlay")
+                .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+            for app in running { _ = app.terminate() }
+            let deadline = Date().addingTimeInterval(5)
+            while running.contains(where: { !$0.isTerminated }), Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            if running.contains(where: { !$0.isTerminated }) {
+                fputs("旧浮窗尚未退出，请从菜单退出后重试。\n", stderr)
+                exit(1)
+            }
             return
         }
         let app = NSApplication.shared
