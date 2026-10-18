@@ -225,6 +225,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var status: NSStatusItem?
     var timer: Timer?
     var query: Process?
+    var updater: Process?
     var snapshot: Snapshot?
     var error: String?
     var lastAttempt = Date.distantPast
@@ -410,6 +411,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         zoneItem.submenu = zones
         menu.addItem(zoneItem)
         menu.addItem(.separator())
+        menu.addItem(item(updater == nil ? "更新版本" : "正在更新…", updater == nil ? #selector(updateVersion) : nil))
         menu.addItem(item("退出浮窗", #selector(quit)))
         return menu
     }
@@ -467,6 +469,54 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.removeObject(forKey: "leftInset")
         UserDefaults.standard.removeObject(forKey: "bottomInset")
         tick()
+    }
+    @objc func updateVersion() {
+        guard updater == nil else { return }
+        let cli = URL(fileURLWithPath: script).deletingLastPathComponent()
+            .appendingPathComponent("overlay-update.js")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: node)
+        process.arguments = [cli.path]
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = searchPath
+        process.environment = env
+        // npm 输出可能超过管道容量，写临时文件以免等待退出时死锁。
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        guard FileManager.default.createFile(atPath: output.path, contents: nil,
+            attributes: [.posixPermissions: 0o600]), let handle = try? FileHandle(forWritingTo: output) else {
+            showUpdateResult("无法创建更新日志，请检查临时目录权限。")
+            return
+        }
+        process.standardOutput = handle
+        process.standardError = handle
+        process.terminationHandler = { [weak self] process in
+            try? handle.close()
+            let data = (try? Data(contentsOf: output)) ?? Data()
+            try? FileManager.default.removeItem(at: output)
+            let message = String(decoding: data.suffix(4096), as: UTF8.self)
+            Task { @MainActor in
+                guard let self else { return }
+                self.updater = nil
+                self.showUpdateResult(process.terminationStatus == 0
+                    ? message : "更新失败，请检查网络或安装目录权限。\n" + message)
+            }
+        }
+        updater = process
+        do { try process.run() }
+        catch {
+            updater = nil
+            try? handle.close()
+            try? FileManager.default.removeItem(at: output)
+            showUpdateResult("无法启动更新，请重新运行 easy-claude show。")
+        }
+    }
+    func showUpdateResult(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "更新版本"
+        alert.informativeText = message
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) {
