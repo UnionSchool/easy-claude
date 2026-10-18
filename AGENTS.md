@@ -26,3 +26,4 @@
 - 时间浮窗开关的菜单文案固定为“显示时间”。
 - update通过当前Node调用npm CLI，只允许更新自身官方npm包，优先保持现有全局前缀，参数数组传递、不使用shell或sudo；更新成功后提示show重开。
 - show/overlay调用自身原生--quit-running，按唯一bundle id仅退出该工具浮窗，等待最多5秒；失败不继续打开，不终止官方Codex/Claude应用。
+- update必须在线刷新latest、校验正式版本并防止降级；只在有更高版本时按明确版本号安装，不直接安装可能缓存的@latest。

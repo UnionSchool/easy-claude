@@ -1,13 +1,25 @@
 import { access, realpath } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { dirname, basename, join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 export function installedPrefix(root, platform = process.platform) {
   const modules = dirname(root.replace(/[\\/]$/, ''));
   if (basename(modules) !== 'node_modules') return null;
   const parent = dirname(modules);
   return basename(parent) === 'lib' ? dirname(parent) : platform === 'win32' ? parent : null;
+}
+
+export function isNewer(latest, current) {
+  if (!/^\d+\.\d+\.\d+$/.test(latest) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(current)) {
+    throw new Error('无法识别正式版本号，未执行更新。');
+  }
+  const a = latest.split('.').map(Number), b = current.split('-')[0].split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] > b[i]; }
+  return current.includes('-');
 }
 
 async function findNpmCli() {
@@ -22,6 +34,14 @@ async function findNpmCli() {
   throw new Error('未找到 npm，请先安装 Node.js/npm，再使用 npm i -g 更新。');
 }
 
+async function readLatest(npmCli, name) {
+  try {
+    const { stdout } = await promisify(execFile)(process.execPath, [npmCli, 'view', name, 'dist-tags.latest',
+      '--json', '--prefer-online', '--registry=https://registry.npmjs.org'], { timeout: 30000, maxBuffer: 4096 });
+    return JSON.parse(stdout);
+  } catch { throw new Error('无法在线检查 npm 最新版本，请检查网络后重试。'); }
+}
+
 function runNpm(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: 'inherit', shell: false });
@@ -34,12 +54,19 @@ function runNpm(command, args) {
 }
 
 export async function updatePackage(name, { root = fileURLToPath(new URL('../', import.meta.url)),
-  getNpmCli = findNpmCli, run = runNpm, platform = process.platform } = {}) {
+  getNpmCli = findNpmCli, getLatest = readLatest, currentVersion = version,
+  run = runNpm, platform = process.platform } = {}) {
   if (!['easy-codex', 'easy-claude'].includes(name)) throw new Error('不支持的更新包名。');
   const npmCli = await getNpmCli();
+  const latest = await getLatest(npmCli, name);
+  if (!isNewer(latest, currentVersion)) {
+    console.log(`${name} 当前 ${currentVersion}，npm 最新 ${latest}，无需更新。`);
+    return;
+  }
   const prefix = installedPrefix(root, platform);
+  // 先在线检查再锁定版本，避免安装阶段复用旧 latest 缓存而降级。
   const args = [npmCli, 'install', '--global', ...(prefix ? ['--prefix', prefix] : []),
-    '--registry=https://registry.npmjs.org', `${name}@latest`];
+    '--prefer-online', '--registry=https://registry.npmjs.org', `${name}@${latest}`];
   await run(process.execPath, args);
-  console.log(`${name} 已更新；运行 ${name} show 自动重启浮窗。`);
+  console.log(`${name} 已更新到 ${latest}；运行 ${name} show 自动重启浮窗。`);
 }
