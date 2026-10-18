@@ -1,7 +1,7 @@
 {
   "name": "easy-claude",
-  "version": "0.1.0",
-  "description": "Claude Code subscription usage and transparent Claude desktop quota ring",
+  "version": "0.2.0",
+  "description": "Claude Code quota rings and transparent world clock for Claude desktop",
   "type": "module",
   "bin": {
     "easy-claude": "bin/easy-claude.js"

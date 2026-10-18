@@ -1,3 +1,4 @@
+import { quotaFetch } from './transport.js';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -48,7 +49,7 @@ export function normalizeUsage(data) {
   return { rateLimitsByLimitId };
 }
 
-export async function readUsage({ signal, timeoutMs = 15000, getToken = loadToken, fetchImpl = fetch } = {}) {
+export async function readUsage({ signal, timeoutMs = 15000, getToken = loadToken, fetchImpl = quotaFetch } = {}) {
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) throw new Error('查询已取消。');
@@ -61,7 +62,8 @@ export async function readUsage({ signal, timeoutMs = 15000, getToken = loadToke
       headers: { authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', accept: 'application/json' },
       redirect: 'error', signal: controller.signal,
     }).catch(() => { throw new Error('无法连接 Claude 额度服务，请检查网络。'); });
-    if (response.status === 401 || response.status === 403) throw new Error(`订阅登录无效或无额度权限。${loginMessage}`);
+    if (response.status === 401) throw new Error(`订阅登录已失效（HTTP 401）。${loginMessage}`);
+    if (response.status === 403) throw new Error('Claude 官方额度服务拒绝访问（HTTP 403）。可能是账号权限、网络访问限制或接口兼容变化；请先检查 Claude Code 的 /usage，不能仅据此判断登录已过期。');
     if (response.status === 429) throw new Error('额度查询过于频繁，请稍后再试。');
     if (!response.ok) throw new Error(`Claude 额度服务暂不可用（HTTP ${response.status}）。`);
     let data;

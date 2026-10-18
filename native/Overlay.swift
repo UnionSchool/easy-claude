@@ -68,8 +68,11 @@ func targetWindow() -> CGRect? {
 }
 
 @MainActor
-final class RingView: NSView {
+class RingView: NSView {
     var remaining: Double?
+    var weeklyRemaining: Double?
+    var weeklyStale = true
+    var showWeeklyPercentage = false
     var stale = true
     var caption = "等待额度"
     var makeMenu: (() -> NSMenu)?
@@ -80,23 +83,30 @@ final class RingView: NSView {
     private var originStart = CGPoint.zero
 
     override func draw(_ dirtyRect: NSRect) {
+        drawRing(radius: 14, remaining: weeklyRemaining, stale: weeklyStale, dashed: true)
+        drawRing(radius: 10, remaining: remaining, stale: stale)
+        let percentage = showWeeklyPercentage ? weeklyRemaining : remaining
+        let percentageStale = showWeeklyPercentage ? weeklyStale : stale
+        let state = RingState.resolve(percentage, stale: percentageStale)
+        let text = percentage.map { "\(Int($0.rounded()))" } ?? "—"
+        drawText(text, y: 10, font: .monospacedDigitSystemFont(ofSize: 9, weight: .semibold), color: state.color)
+    }
+    private func drawRing(radius: CGFloat, remaining: Double?, stale: Bool, dashed: Bool = false) {
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let track = NSBezierPath(ovalIn: CGRect(x: center.x - 14, y: center.y - 14, width: 28, height: 28))
-        track.lineWidth = 2
+        let track = NSBezierPath(ovalIn: CGRect(x: center.x - radius, y: center.y - radius,
+                                               width: radius * 2, height: radius * 2))
+        track.lineWidth = dashed ? 3 : 2
+        if dashed { track.setLineDash([2, 2], count: 2, phase: 0) }
         NSColor.labelColor.withAlphaComponent(0.12).setStroke()
         track.stroke()
-        let state = RingState.resolve(remaining, stale: stale)
-        if let remaining, remaining > 0, !stale {
-            let arc = NSBezierPath()
-            arc.lineWidth = 2
-            arc.lineCapStyle = .round
-            arc.appendArc(withCenter: center, radius: 14, startAngle: 90,
-                          endAngle: 90 - CGFloat(min(100, max(0, remaining))) * 3.6, clockwise: true)
-            state.color.setStroke()
-            arc.stroke()
-        }
-        let text = remaining.map { "\(Int($0.rounded()))%" } ?? "—"
-        drawText(text, y: 10, font: .monospacedDigitSystemFont(ofSize: 9, weight: .semibold), color: state.color)
+        guard let remaining, remaining > 0, !stale else { return }
+        let arc = NSBezierPath()
+        arc.lineWidth = dashed ? 3 : 2
+        arc.lineCapStyle = .round
+        arc.appendArc(withCenter: center, radius: radius, startAngle: 90,
+                      endAngle: 90 - CGFloat(min(100, max(0, remaining))) * 3.6, clockwise: true)
+        RingState.resolve(remaining, stale: stale).color.setStroke()
+        arc.stroke()
     }
     private func drawText(_ text: String, y: CGFloat, font: NSFont, color: NSColor) {
         let style = NSMutableParagraphStyle()
@@ -125,20 +135,74 @@ final class RingView: NSView {
     }
 }
 
+struct ClockCity {
+    let name: String
+    let identifier: String
+    static let presets: [ClockCity] = [
+        ClockCity(name: "硅谷", identifier: "America/Los_Angeles"),
+        ClockCity(name: "洛杉矶", identifier: "America/Los_Angeles"),
+        ClockCity(name: "西雅图", identifier: "America/Los_Angeles"),
+        ClockCity(name: "华盛顿", identifier: "America/New_York"),
+        ClockCity(name: "哥伦布", identifier: "America/New_York"),
+        ClockCity(name: "新加坡", identifier: "Asia/Singapore"),
+        ClockCity(name: "上海", identifier: "Asia/Shanghai")
+    ]
+}
+
+func clockText(at date: Date, zone: TimeZone) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = zone
+    formatter.dateFormat = "HH:mm"
+    return formatter.string(from: date)
+}
+
+func clockState(at date: Date, zone: TimeZone) -> RingState {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    let hour = calendar.component(.hour, from: date)
+    if hour >= 9 && hour < 15 { return .green }
+    if hour >= 15 { return .orange }
+    return .red
+}
+
+@MainActor
+final class ClockView: RingView {
+    var zone = TimeZone(identifier: "America/Los_Angeles")!
+    var cityName = "硅谷"
+    override func draw(_ dirtyRect: NSRect) {
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        let now = Date()
+        let time = clockText(at: now, zone: zone)
+        (time as NSString).draw(in: CGRect(x: 0, y: 17, width: bounds.width, height: 25),
+            withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 20, weight: .medium),
+                             .foregroundColor: clockState(at: now, zone: zone).color, .paragraphStyle: style])
+        let city = cityName
+        (city as NSString).draw(in: CGRect(x: 0, y: 1, width: bounds.width, height: 15),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 10),
+                             .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style])
+    }
+}
+
 @MainActor
 final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 32, height: 32),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     let ring = RingView(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
+    let clockPanel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 96, height: 46),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    let clock = ClockView(frame: CGRect(x: 0, y: 0, width: 96, height: 46))
+    var clockInset = CGPoint(x: 164, y: 0)
+    var clockEnabled = true
     var status: NSStatusItem?
     var timer: Timer?
     var query: Process?
     var snapshot: Snapshot?
     var error: String?
-    var selectedID: String?
     var lastAttempt = Date.distantPast
     var lastRect: CGRect?
-    var inset = CGPoint(x: 10, y: 74)
+    var inset = CGPoint(x: 138, y: 4)
     var node = ""
     var script = ""
     var searchPath = ""
@@ -153,7 +217,32 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if prefs.object(forKey: "leftInset") != nil {
             inset = CGPoint(x: prefs.double(forKey: "leftInset"), y: prefs.double(forKey: "bottomInset"))
         }
-        selectedID = prefs.string(forKey: "selectedWindow")
+        if let identifier = prefs.string(forKey: "clockTimeZone"), let zone = TimeZone(identifier: identifier) {
+            clock.zone = zone
+            let savedCity = prefs.string(forKey: "clockCity")
+            let preset = ClockCity.presets.first { $0.name == savedCity && $0.identifier == identifier }
+                ?? ClockCity.presets.first { $0.identifier == identifier }
+            clock.cityName = preset?.name ?? identifier
+        }
+        ring.showWeeklyPercentage = prefs.bool(forKey: "showWeeklyPercentage")
+        clockEnabled = prefs.object(forKey: "clockEnabled") == nil || prefs.bool(forKey: "clockEnabled")
+        if prefs.object(forKey: "clockLeftInset") != nil {
+            clockInset = CGPoint(x: prefs.double(forKey: "clockLeftInset"), y: prefs.double(forKey: "clockBottomInset"))
+        }
+        clockPanel.isOpaque = false
+        clockPanel.backgroundColor = .clear
+        clockPanel.hasShadow = false
+        clockPanel.level = .floating
+        clockPanel.hidesOnDeactivate = false
+        clockPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        clockPanel.contentView = clock
+        clock.makeMenu = { [weak self] in self?.makeMenu() ?? NSMenu() }
+        clock.moved = { [weak self] point in
+            guard let self, let rect = self.lastRect else { return }
+            self.clockInset = CGPoint(x: point.x - rect.minX, y: point.y - rect.minY)
+            prefs.set(self.clockInset.x, forKey: "clockLeftInset")
+            prefs.set(self.clockInset.y, forKey: "clockBottomInset")
+        }
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -179,32 +268,44 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(hide), name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
         tick()
     }
-    @objc func hide() { panel.orderOut(nil) }
+    @objc func hide() { panel.orderOut(nil); clockPanel.orderOut(nil) }
     @objc func tick() {
-        guard let rect = targetWindow() else { panel.orderOut(nil); lastRect = nil; return }
+        guard let rect = targetWindow() else { hide(); lastRect = nil; return }
         lastRect = rect
+        if clockEnabled {
+            if !clock.dragging {
+                let x: CGFloat = max(rect.minX, min(rect.maxX - 96, rect.minX + clockInset.x))
+                let y: CGFloat = max(rect.minY, min(rect.maxY - 46, rect.minY + clockInset.y))
+                clockPanel.setFrameOrigin(CGPoint(x: x, y: y))
+            }
+            clock.needsDisplay = true
+            clock.toolTip = "\(clock.cityName) · \(clock.zone.identifier)"
+            clock.setAccessibilityLabel("\(clock.cityName) \(clock.zone.identifier) \(clockText(at: Date(), zone: clock.zone))")
+            if !clockPanel.isVisible { clockPanel.orderFrontRegardless() }
+        } else { clockPanel.orderOut(nil) }
         if !ring.dragging { panel.setFrameOrigin(ringOrigin(in: rect, inset: inset)) }
         if !panel.isVisible { panel.orderFrontRegardless() }
         if Date().timeIntervalSince(lastAttempt) >= 300 { refresh() }
         updateRing()
     }
-    var chosen: UsageWindow? {
-        guard let windows = snapshot?.windows else { return nil }
-        if let selectedID { return windows.first { $0.id == selectedID } }
-        // 默认优先 claude 桶，取其中最紧张的窗口，不把不同窗口相加。
-        let claude = windows.filter { $0.id.hasPrefix("claude:") }
-        return (claude.isEmpty ? windows : claude).filter { $0.remaining != nil }.min { $0.remaining! < $1.remaining! }
-            ?? windows.first
-    }
     func updateRing() {
-        let stale = error != nil || snapshot == nil || Date().timeIntervalSince1970 - (snapshot?.fetchedAt ?? 0) > 600
-            || (chosen?.resetsAt.map { $0 <= Date().timeIntervalSince1970 } ?? false)
-        ring.remaining = chosen?.remaining
-        ring.stale = stale
-        ring.caption = stale ? (snapshot == nil ? "等待额度" : "数据过期") : chosen?.label ?? "额度未知"
+        let windows = snapshot?.windows ?? []
+        let weekly = windows.first { $0.id == "seven_day:primary" }
+        let fiveHour = windows.first { $0.id == "five_hour:primary" }
+        let now = Date().timeIntervalSince1970
+        let snapshotStale = error != nil || snapshot == nil || now - (snapshot?.fetchedAt ?? 0) > 600
+        func stale(_ window: UsageWindow?) -> Bool {
+            snapshotStale || window?.remaining == nil || (window?.resetsAt.map { $0 <= now } ?? false)
+        }
+        ring.remaining = fiveHour?.remaining
+        ring.stale = stale(fiveHour)
+        ring.weeklyRemaining = weekly?.remaining
+        ring.weeklyStale = stale(weekly)
+        func label(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? "未知" }
+        let summary = "外侧粗环 · 周额度：\(label(weekly?.remaining))\(ring.weeklyStale ? "（未知或已过期）" : "")\n内侧细环 · 5 小时：\(label(fiveHour?.remaining))\(ring.stale ? "（未知或已过期）" : "")"
         let fetched = snapshot.map { Date(timeIntervalSince1970: $0.fetchedAt).formatted(date: .omitted, time: .standard) } ?? "尚未更新"
-        ring.toolTip = "本机 Claude CLI 账号额度\n\(chosen?.name ?? "未选择窗口")\n\(error ?? snapshot?.detail ?? "正在读取")\n状态：\(stale ? "数据未知或已过期" : "已更新")\n更新时间：\(fetched)\n拖动校准位置；双击刷新；右键打开菜单"
-        ring.setAccessibilityLabel("Claude \(chosen?.name ?? "") 剩余 \(chosen?.remaining.map { "\(Int($0.rounded()))%" } ?? "未知")，\(ring.caption)")
+        ring.toolTip = "本机 Claude CLI 账号额度\n\(summary)\n\(error ?? snapshot?.detail ?? "正在读取")\n更新时间：\(fetched)\n中心数字为\(ring.showWeeklyPercentage ? "周" : "5小时")剩余；拖动校准位置；双击刷新；右键打开菜单"
+        ring.setAccessibilityLabel("Claude \(summary)")
         ring.needsDisplay = true
     }
     @objc func refresh() {
@@ -250,15 +351,39 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let error { menu.addItem(item(error, nil)) }
         if snapshot?.restricted == true { menu.addItem(item("服务端提示：当前使用受限", nil)) }
         menu.addItem(.separator())
-        for window in snapshot?.windows ?? [] {
-            let remaining = window.remaining.map { "\(Int($0.rounded()))%" } ?? "未知"
-            let option = item("\(window.name) · \(remaining)", #selector(selectWindow(_:)))
-            option.representedObject = window.id
-            option.state = chosen?.id == window.id ? .on : .off
+        for (id, label) in [("five_hour:primary", "5小时"), ("seven_day:primary", "周")] {
+            let window = snapshot?.windows.first { $0.id == id }
+            let remaining = window?.remaining.map { "\(Int($0.rounded()))%" } ?? "未知"
+            let reset: String
+            if let seconds = window?.resetsAt {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "zh_CN")
+                formatter.timeZone = .current
+                formatter.dateFormat = "MM-dd HH:mm"
+                reset = formatter.string(from: Date(timeIntervalSince1970: seconds))
+            } else { reset = "未知" }
+            let option = item("\(label) · \(remaining) · 重置 \(reset)", #selector(selectPercentage(_:)))
+            option.representedObject = id
+            option.state = (ring.showWeeklyPercentage == (id == "seven_day:primary")) ? .on : .off
             menu.addItem(option)
         }
         menu.addItem(item(query == nil ? "立即刷新" : "正在刷新…", query == nil ? #selector(refresh) : nil))
         menu.addItem(item("恢复默认位置", #selector(resetPosition)))
+        menu.addItem(.separator())
+        let toggle = item("显示电子时钟", #selector(toggleClock))
+        toggle.state = clockEnabled ? .on : .off
+        menu.addItem(toggle)
+        let zones = NSMenu()
+        for city in ClockCity.presets {
+            let option = item(city.name, #selector(selectTimeZone(_:)))
+            option.representedObject = city.name
+            option.state = clock.cityName == city.name && clock.zone.identifier == city.identifier ? .on : .off
+            zones.addItem(option)
+        }
+        zones.addItem(item("自定义时区…", #selector(customTimeZone)))
+        let zoneItem = item("时区 · \(clock.cityName)", nil)
+        zoneItem.submenu = zones
+        menu.addItem(zoneItem)
         menu.addItem(.separator())
         menu.addItem(item("退出浮窗", #selector(quit)))
         return menu
@@ -268,13 +393,52 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let fresh = makeMenu()
         for item in fresh.items { fresh.removeItem(item); menu.addItem(item) }
     }
-    @objc func selectWindow(_ sender: NSMenuItem) {
-        selectedID = sender.representedObject as? String
-        UserDefaults.standard.set(selectedID, forKey: "selectedWindow")
+    @objc func selectPercentage(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        ring.showWeeklyPercentage = id == "seven_day:primary"
+        UserDefaults.standard.set(ring.showWeeklyPercentage, forKey: "showWeeklyPercentage")
         updateRing()
     }
+    @objc func toggleClock() {
+        clockEnabled.toggle()
+        UserDefaults.standard.set(clockEnabled, forKey: "clockEnabled")
+        tick()
+    }
+    func setTimeZone(_ identifier: String, cityName: String? = nil) -> Bool {
+        guard let zone = TimeZone(identifier: identifier) else { return false }
+        clock.zone = zone
+        clock.cityName = cityName ?? ClockCity.presets.first { $0.identifier == zone.identifier }?.name ?? zone.identifier
+        UserDefaults.standard.set(clock.cityName, forKey: "clockCity")
+        UserDefaults.standard.set(zone.identifier, forKey: "clockTimeZone")
+        clock.needsDisplay = true
+        return true
+    }
+    @objc func selectTimeZone(_ sender: NSMenuItem) {
+        if let name = sender.representedObject as? String,
+           let city = ClockCity.presets.first(where: { $0.name == name }) {
+            _ = setTimeZone(city.identifier, cityName: city.name)
+        }
+    }
+    @objc func customTimeZone() {
+        let alert = NSAlert()
+        alert.messageText = "设置电子时钟时区"
+        alert.informativeText = "输入 IANA 时区，例如 America/Los_Angeles；自动适应夏令时。"
+        let field = NSTextField(string: clock.zone.identifier)
+        field.frame = CGRect(x: 0, y: 0, width: 300, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        NSApp.activate(ignoringOtherApps: true)
+        while alert.runModal() == .alertFirstButtonReturn {
+            if setTimeZone(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) { break }
+            alert.informativeText = "无效时区，请输入有效的 IANA 名称，例如 America/Los_Angeles。"
+        }
+    }
     @objc func resetPosition() {
-        inset = CGPoint(x: 10, y: 74)
+        clockInset = CGPoint(x: 164, y: 0)
+        UserDefaults.standard.removeObject(forKey: "clockLeftInset")
+        UserDefaults.standard.removeObject(forKey: "clockBottomInset")
+        inset = CGPoint(x: 138, y: 4)
         UserDefaults.standard.removeObject(forKey: "leftInset")
         UserDefaults.standard.removeObject(forKey: "bottomInset")
         tick()
@@ -291,6 +455,23 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
 struct Main {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--self-test") {
+            precondition(ClockCity.presets.map(\.name) == ["硅谷", "洛杉矶", "西雅图", "华盛顿", "哥伦布", "新加坡", "上海"])
+            precondition(ClockCity.presets.allSatisfy { TimeZone(identifier: $0.identifier) != nil })
+            let la = TimeZone(identifier: "America/Los_Angeles")!
+            let singapore = TimeZone(identifier: "Asia/Singapore")!
+            let winter = ISO8601DateFormatter().date(from: "2026-01-15T12:00:00Z")!
+            let summer = ISO8601DateFormatter().date(from: "2026-07-15T12:00:00Z")!
+            precondition(clockText(at: winter, zone: la) == "04:00")
+            precondition(clockText(at: summer, zone: la) == "05:00")
+            precondition(clockText(at: winter, zone: singapore) == "20:00")
+            precondition(TimeZone(identifier: "Invalid/Zone") == nil)
+            let utc = TimeZone(secondsFromGMT: 0)!
+            for (hour, state) in [(0, RingState.red), (6, .red), (8, .red), (9, .green), (14, .green), (15, .orange), (23, .orange)] {
+                let date = Date(timeIntervalSince1970: Double(hour * 3600))
+                precondition(clockState(at: date, zone: utc) == state)
+            }
+            precondition(clockState(at: winter, zone: la) == .red)
+            precondition(clockState(at: winter, zone: singapore) == .orange)
             assert(RingState.resolve(51, stale: false) == .green)
             assert(RingState.resolve(50, stale: false) == .orange)
             assert(RingState.resolve(20, stale: false) == .orange)
@@ -299,7 +480,7 @@ struct Main {
             assert(RingState.resolve(99, stale: true) == .unknown)
             assert(appKitRect(CGRect(x: -900, y: 100, width: 800, height: 600), primaryHeight: 900).origin == CGPoint(x: -900, y: 200))
             let bounds = CGRect(x: 100, y: 100, width: 800, height: 600)
-            assert(ringOrigin(in: bounds, inset: CGPoint(x: 10, y: 74)) == CGPoint(x: 110, y: 174))
+            assert(ringOrigin(in: bounds, inset: CGPoint(x: 138, y: 4)) == CGPoint(x: 238, y: 104))
             assert(ringOrigin(in: bounds, inset: CGPoint(x: -100, y: -100)) == CGPoint(x: 100, y: 100))
             assert(ringOrigin(in: bounds, inset: CGPoint(x: 9999, y: 9999)) == CGPoint(x: 868, y: 668))
             print("Swift 圆环颜色与窗口坐标检查通过")
@@ -321,6 +502,7 @@ struct Main {
                 (transform as NSAffineTransform).concat()
                 let view = RingView(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
                 view.remaining = value < 0 ? nil : value; view.stale = value < 0
+                view.weeklyRemaining = value < 0 ? nil : 100 - value; view.weeklyStale = value < 0
                 view.caption = value < 0 ? "额度未知" : "7天"
                 view.draw(view.bounds)
                 NSGraphicsContext.restoreGraphicsState()

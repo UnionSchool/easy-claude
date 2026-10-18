@@ -33,3 +33,9 @@ test('取消与超时释放请求', async () => {
   await assert.rejects(readUsage({getToken: async ()=>'test-only',fetchImpl,timeoutMs:10}),/超时/);
   const controller=new AbortController();controller.abort();await assert.rejects(readUsage({signal:controller.signal}),/取消/);
 });
+
+test('区分登录失效和服务拒绝，403 不误导为重新登录', async () => {
+  const request = status => readUsage({getToken: async () => 'test-only', fetchImpl: async () => new Response('secret', {status})});
+  await assert.rejects(request(401), /HTTP 401.*claude auth login/);
+  await assert.rejects(request(403), error => error.message.includes('HTTP 403') && error.message.includes('/usage') && !error.message.includes('claude auth login'));
+});
