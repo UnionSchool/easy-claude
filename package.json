@@ -1,6 +1,6 @@
 {
   "name": "easy-claude",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Claude Code quota rings and transparent world clock for Claude desktop",
   "type": "module",
   "bin": {

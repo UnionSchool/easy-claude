@@ -34,7 +34,7 @@ async function findNpmCli() {
   throw new Error('未找到 npm，请先安装 Node.js/npm，再使用 npm i -g 更新。');
 }
 
-async function readLatest(npmCli, name) {
+export async function readLatest(npmCli, name) {
   try {
     const { stdout } = await promisify(execFile)(process.execPath, [npmCli, 'view', name, 'dist-tags.latest',
       '--json', '--prefer-online', '--registry=https://registry.npmjs.org'], { timeout: 30000, maxBuffer: 4096 });
@@ -68,5 +68,12 @@ export async function updatePackage(name, { root = fileURLToPath(new URL('../', 
   const args = [npmCli, 'install', '--global', ...(prefix ? ['--prefix', prefix] : []),
     '--prefer-online', '--registry=https://registry.npmjs.org', `${name}@${latest}`];
   await run(process.execPath, args);
-  console.log(`${name} 已更新到 ${latest}；运行 ${name} show 自动重启浮窗。`);
+  console.log(`${name} 已更新到 ${latest}。`);
+}
+
+export async function checkUpdate(name, { getNpmCli = findNpmCli, getLatest = readLatest,
+  currentVersion = version } = {}) {
+  if (!['easy-codex', 'easy-claude'].includes(name)) throw new Error('不支持的更新包名。');
+  const latest = await getLatest(await getNpmCli(), name);
+  return { latest, available: isNewer(latest, currentVersion) };
 }

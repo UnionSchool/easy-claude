@@ -153,6 +153,11 @@ struct ClockCity {
     ]
 }
 
+func versionCheckDue(lastAttempt: Double, checkedVersion: String?, currentVersion: String,
+                     now: Double = Date().timeIntervalSince1970) -> Bool {
+    checkedVersion != currentVersion || now - lastAttempt >= 86400
+}
+
 func resetDescription(_ resetsAt: Double?, weekly: Bool, now: Date = Date(), zone: TimeZone = .current) -> String {
     guard let resetsAt, resetsAt.isFinite, abs(resetsAt) < 8.64e12 else { return "重置时间未知" }
     let remaining = resetsAt - now.timeIntervalSince1970
@@ -226,6 +231,9 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var timer: Timer?
     var query: Process?
     var updater: Process?
+    var versionCheck: Process?
+    var updateAvailable = false
+    let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知"
     var snapshot: Snapshot?
     var error: String?
     var lastAttempt = Date.distantPast
@@ -298,6 +306,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func hide() { panel.orderOut(nil); clockPanel.orderOut(nil) }
     @objc func tick() {
+        checkVersionIfNeeded()
         guard let rect = targetWindow() else { hide(); lastRect = nil; return }
         lastRect = rect
         if clockEnabled {
@@ -411,7 +420,19 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         zoneItem.submenu = zones
         menu.addItem(zoneItem)
         menu.addItem(.separator())
-        menu.addItem(item(updater == nil ? "更新版本" : "正在更新…", updater == nil ? #selector(updateVersion) : nil))
+        let updateItem = item(updater == nil ? "更新版本·\(appVersion)" : "正在更新…·\(appVersion)",
+                              updater == nil ? #selector(updateVersion) : nil)
+        if updateAvailable {
+            let title = NSMutableAttributedString(string: updateItem.title + "\t●")
+            let style = NSMutableParagraphStyle()
+            style.tabStops = [NSTextTab(textAlignment: .right, location: 230)]
+            title.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: title.length))
+            title.addAttribute(.foregroundColor, value: NSColor.systemGreen,
+                               range: NSRange(location: title.length - 1, length: 1))
+            updateItem.attributedTitle = title
+            updateItem.setAccessibilityHelp("有新版本可更新")
+        }
+        menu.addItem(updateItem)
         menu.addItem(item("退出浮窗", #selector(quit)))
         return menu
     }
@@ -470,6 +491,42 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.removeObject(forKey: "bottomInset")
         tick()
     }
+    func checkVersionIfNeeded() {
+        let prefs = UserDefaults.standard
+        updateAvailable = prefs.string(forKey: "updateCheckedVersion") == appVersion
+            && prefs.bool(forKey: "updateAvailable")
+        let last = prefs.double(forKey: "updateLastAttempt")
+        guard versionCheck == nil, !script.isEmpty,
+              versionCheckDue(lastAttempt: last, checkedVersion: prefs.string(forKey: "updateCheckedVersion"),
+                              currentVersion: appVersion) else { return }
+        prefs.set(appVersion, forKey: "updateCheckedVersion")
+        prefs.set(Date().timeIntervalSince1970, forKey: "updateLastAttempt")
+        prefs.set(false, forKey: "updateAvailable")
+        updateAvailable = false
+        let process = Process(), pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: node)
+        process.arguments = [URL(fileURLWithPath: script).deletingLastPathComponent()
+            .appendingPathComponent("check-update.js").path]
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = searchPath
+        process.environment = env
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] process in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let available = process.terminationStatus == 0 && value?["available"] as? Bool == true
+            Task { @MainActor in
+                guard let self else { return }
+                self.versionCheck = nil
+                self.updateAvailable = available
+                UserDefaults.standard.set(available, forKey: "updateAvailable")
+            }
+        }
+        versionCheck = process
+        do { try process.run() }
+        catch { versionCheck = nil }
+    }
     @objc func updateVersion() {
         guard updater == nil else { return }
         let cli = URL(fileURLWithPath: script).deletingLastPathComponent()
@@ -522,6 +579,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
         query?.terminate()
+        versionCheck?.terminate()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 }
@@ -530,6 +588,10 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
 struct Main {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--self-test") {
+            precondition(!versionCheckDue(lastAttempt: 100, checkedVersion: "1.0.0", currentVersion: "1.0.0", now: 86499))
+            precondition(versionCheckDue(lastAttempt: 100, checkedVersion: "1.0.0", currentVersion: "1.0.0", now: 86500))
+            precondition(versionCheckDue(lastAttempt: 100, checkedVersion: nil, currentVersion: "1.0.0", now: 100))
+            precondition(versionCheckDue(lastAttempt: 100, checkedVersion: "1.0.0", currentVersion: "1.0.1", now: 100))
             precondition(ClockCity.presets.map(\.name) == ["硅谷", "洛杉矶", "西雅图", "华盛顿", "哥伦布", "新加坡", "上海"])
             precondition(ClockCity.presets.allSatisfy { TimeZone(identifier: $0.identifier) != nil })
             let countdownStart = ISO8601DateFormatter().date(from: "2026-10-15T04:57:00Z")!
