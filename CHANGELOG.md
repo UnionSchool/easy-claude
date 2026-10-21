@@ -1,6 +1,6 @@
 # 更新记录
 
-## v0.3.2（2026-10-20，America/Los_Angeles）
+## v0.3.3（2026-10-20，America/Los_Angeles）
 
 - 改为只请求一次 `https://ipinfo.io/json`，同时获取当前网络出口的公网IP、城市和时区；继续支持环境及系统HTTPS代理。
 - 跟随IP时区时，浮窗时间下方显示接口返回的城市名称，例如 `Los Angeles`，不再显示“IP时区”；时间仍按接口返回的时区计算。
