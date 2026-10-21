@@ -185,12 +185,21 @@ func resetDescription(_ resetsAt: Double?, weekly: Bool, now: Date = Date(), zon
     return "\(duration)后 \(time) 重置"
 }
 
-func clockText(at date: Date, zone: TimeZone) -> String {
+func clockText(at date: Date, zone: TimeZone, locale: Locale = .autoupdatingCurrent) -> String {
     let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.locale = locale
     formatter.timeZone = zone
-    formatter.dateFormat = "HH:mm"
+    formatter.setLocalizedDateFormatFromTemplate("jm")
     return formatter.string(from: date)
+}
+
+
+@MainActor
+func fittedClockFont(for text: String, width: CGFloat, baseSize: CGFloat) -> NSFont {
+    let base = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
+    let measured = max(1, (text as NSString).size(withAttributes: [.font: base]).width)
+    let size = min(baseSize, baseSize * max(1, width - 2) / measured)
+    return NSFont.monospacedDigitSystemFont(ofSize: size, weight: .medium)
 }
 
 func clockState(at date: Date, zone: TimeZone) -> RingState {
@@ -212,7 +221,7 @@ final class ClockView: RingView {
         let now = Date()
         let time = clockText(at: now, zone: zone)
         (time as NSString).draw(in: CGRect(x: 0, y: 17, width: bounds.width, height: 25),
-            withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 20, weight: .medium),
+            withAttributes: [.font: fittedClockFont(for: time, width: bounds.width, baseSize: 20),
                              .foregroundColor: clockState(at: now, zone: zone).color, .paragraphStyle: style])
         let city = cityName
         (city as NSString).draw(in: CGRect(x: 0, y: 1, width: bounds.width, height: 15),
@@ -648,6 +657,16 @@ struct Main {
             let countdownStart = ISO8601DateFormatter().date(from: "2026-10-15T04:57:00Z")!
             let countdownUTC = TimeZone(secondsFromGMT: 0)!
             let afternoon = ISO8601DateFormatter().date(from: "2026-10-21T14:30:00Z")!
+            for identifier in ["en_US", "en_GB", "zh_CN"] {
+                let text = clockText(at: afternoon, zone: countdownUTC, locale: Locale(identifier: identifier))
+                if identifier == "en_US" { precondition(text.contains("PM") && !text.contains("14:30")) }
+                else { precondition(text == "14:30") }
+                let font = fittedClockFont(for: text, width: 96, baseSize: 20)
+                precondition((text as NSString).size(withAttributes: [.font: font]).width <= 96 - 1)
+            }
+            let laClock = clockText(at: afternoon, zone: TimeZone(identifier: "America/Los_Angeles")!, locale: Locale(identifier: "en_US"))
+            precondition(laClock.contains("7:30") && laClock.contains("AM"))
+
             let morning = ISO8601DateFormatter().date(from: "2026-10-21T02:30:00Z")!
             for weekly in [false, true] {
                 let us = resetDescription(afternoon.timeIntervalSince1970, weekly: weekly,
@@ -683,9 +702,9 @@ struct Main {
             let singapore = TimeZone(identifier: "Asia/Singapore")!
             let winter = ISO8601DateFormatter().date(from: "2026-01-15T12:00:00Z")!
             let summer = ISO8601DateFormatter().date(from: "2026-07-15T12:00:00Z")!
-            precondition(clockText(at: winter, zone: la) == "04:00")
-            precondition(clockText(at: summer, zone: la) == "05:00")
-            precondition(clockText(at: winter, zone: singapore) == "20:00")
+            precondition(clockText(at: winter, zone: la, locale: Locale(identifier: "en_GB")) == "04:00")
+            precondition(clockText(at: summer, zone: la, locale: Locale(identifier: "en_GB")) == "05:00")
+            precondition(clockText(at: winter, zone: singapore, locale: Locale(identifier: "en_GB")) == "20:00")
             precondition(TimeZone(identifier: "Invalid/Zone") == nil)
             let utc = TimeZone(secondsFromGMT: 0)!
             for (hour, state) in [(0, RingState.red), (6, .red), (8, .red), (9, .green), (14, .green), (15, .green), (17, .green), (18, .orange), (23, .orange)] {
