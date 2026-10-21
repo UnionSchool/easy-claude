@@ -30,6 +30,7 @@ with tempfile.TemporaryDirectory(prefix=name + '-native-tests-') as temporary:
         domain = 'com.unionschool.update-test-' + uuid.uuid4().hex
         work = base / label
         work.mkdir()
+        (work / 'overlay-ip.js').write_text('console.log(JSON.stringify({ip:"203.0.113.1",city:"Test City"}));')
         app = work / 'Test.app'
         shutil.copytree(source, app)
         plist = app / 'Contents/Info.plist'

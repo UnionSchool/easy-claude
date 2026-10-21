@@ -20,6 +20,7 @@ with tempfile.TemporaryDirectory(prefix='easy-reminder-test-') as temporary:
         domain = 'com.unionschool.reminder-test-' + uuid.uuid4().hex
         work = folder / label
         work.mkdir()
+        (work / 'overlay-ip.js').write_text('console.log(JSON.stringify({ip:"203.0.113.1",city:"Test City"}));')
         app = work / 'Test.app'
         shutil.copytree(source, app)
         info = app / 'Contents/Info.plist'
