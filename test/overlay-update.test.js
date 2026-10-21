@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { updatePackage } from '../src/update.js';
-import { updateAndShow } from '../src/overlay-update.js';
+import { performUpdateAndShow as updateAndShow } from '../src/overlay-update.js';
 
 test('菜单更新成功后才重开浮窗', async () => {
   const calls = [];

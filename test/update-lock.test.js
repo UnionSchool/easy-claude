@@ -1,20 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, access } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { withUpdateLock } from '../src/update-lock.js';
+import { runWithUpdateLock } from '../src/update-lock.js';
 
-test('并发更新只能进入一个，成功或失败均释放锁', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'easy-update-lock-test-'));
-  const lock = join(dir, 'update.lock');
-  try {
-    await withUpdateLock(async () => {
-      await assert.rejects(withUpdateLock(async () => assert.fail('不得并发更新'), { lock }), /另一个 Easy/);
-    }, { lock });
-    await assert.rejects(access(lock));
-    await assert.rejects(withUpdateLock(async () => { throw new Error('offline'); }, { lock }), /offline/);
-    await assert.rejects(access(lock));
-    assert.equal(await withUpdateLock(async () => 42, { lock }), 42);
-  } finally { await rm(dir, { recursive: true, force: true }); }
+test('系统锁通过参数数组传递，不启动shell或删除旧锁目录', async () => {
+  const calls = [];
+  await runWithUpdateLock('/node path', ['/script path', '--locked'], {
+    platform: 'darwin', lock: '/tmp/update.flock', binary: '/app helper',
+    run: async (...args) => { calls.push(args); return 0; }
+  });
+  assert.deepEqual(calls, [['/app helper', ['--with-update-lock', '/tmp/update.flock', '/node path', '/script path', '--locked']]]);
+});
+
+test('占用、权限、启动失败和进程失败均明确报错', async () => {
+  for (const [code, message] of [[75, /另一个 Easy/], [73, /权限/], [74, /Node.js/], [1, /未完成/]]) {
+    await assert.rejects(runWithUpdateLock('/node', [], { platform: 'darwin', run: async () => code }), message);
+  }
+  await assert.rejects(runWithUpdateLock('/node', [], { platform: 'linux',
+    run: async () => assert.fail('不得启动不支持的平台组件') }), /macOS/);
 });

@@ -1,5 +1,7 @@
 import AppKit
 import CoreGraphics
+import Darwin
+import UserNotifications
 
 struct UsageWindow: Decodable {
     let id: String
@@ -230,8 +232,36 @@ final class ClockView: RingView {
     }
 }
 
+// 只等待耗尽窗口，但确认恢复时必须同时检查所有已知窗口，缺失或未知不能报可用。
+struct AvailabilityReminder: Codable {
+    var ids: [String]
+    var due: Double
+    static func arm(_ windows: [UsageWindow], now: Double) -> Self? {
+        guard !windows.isEmpty, windows.allSatisfy({ window in
+            guard let remaining = window.remaining, remaining.isFinite, remaining >= 0,
+                  let reset = window.resetsAt, reset.isFinite, reset > now else { return false }
+            return true
+        }) else { return nil }
+        let blocked = windows.filter { $0.remaining == 0 }
+        guard let due = blocked.compactMap(\.resetsAt).max() else { return nil }
+        return Self(ids: windows.map(\.id), due: due)
+    }
+    mutating func recovered(_ windows: [UsageWindow], fetchedAt: Double, restricted: Bool, now: Double) -> Bool {
+        guard now >= due, fetchedAt >= due, now - fetchedAt <= 120, !restricted,
+              ids.allSatisfy({ id in windows.contains { $0.id == id } }), !windows.isEmpty else { return false }
+        let blocked = windows.filter { $0.remaining == 0 }
+        if let later = blocked.compactMap(\.resetsAt).filter({ $0.isFinite && $0 > now }).max() { due = later }
+        return windows.allSatisfy {
+            guard let remaining = $0.remaining, remaining.isFinite, remaining > 0,
+                  let reset = $0.resetsAt, reset.isFinite, reset > now else { return false }
+            return true
+        }
+    }
+}
+func reminderWindows(_ windows: [UsageWindow]) -> [UsageWindow] { windows.filter { ["five_hour:primary", "seven_day:primary"].contains($0.id) } }
+
 @MainActor
-final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 32, height: 32),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     let ring = RingView(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
@@ -249,6 +279,11 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var automaticUpdateError: String?
     var versionCheckError: String?
     let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知"
+    var reminder = UserDefaults.standard.data(forKey: "availabilityReminder").flatMap { try? JSONDecoder().decode(AvailabilityReminder.self, from: $0) }
+    var reminderSending = false
+    var reminderAuthorizing = false
+    var reminderGeneration = 0
+    var reminderError: String?
     var snapshot: Snapshot?
     var error: String?
     var lastAttempt = Date.distantPast
@@ -260,6 +295,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var claudeHome = ""
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         let args = CommandLine.arguments
         guard args.count >= 4 else { NSApp.terminate(nil); return }
         node = args[1]; script = args[2]; searchPath = args[3]
@@ -322,6 +358,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func hide() { panel.orderOut(nil); clockPanel.orderOut(nil) }
     @objc func tick() {
         checkVersionIfNeeded()
+        if let reminder, Date().timeIntervalSince(lastAttempt) >= (Date().timeIntervalSince1970 >= reminder.due ? 60 : 300) { refresh() }
         guard let rect = targetWindow() else { hide(); lastRect = nil; return }
         lastRect = rect
         if clockEnabled {
@@ -389,12 +426,75 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self.snapshot = value; self.error = nil
                     } else { self.error = "额度查询失败" }
                 } catch { self.error = "无法读取额度响应，请检查 CLI 和网络" }
+                self.checkReminder()
                 self.updateRing()
             }
         }
         query = process
         do { try process.run() }
         catch { query = nil; self.error = "无法启动额度查询，请重新运行 easy-claude show"; updateRing() }
+    }
+    func saveReminder() {
+        if let reminder, let data = try? JSONEncoder().encode(reminder) {
+            UserDefaults.standard.set(data, forKey: "availabilityReminder")
+        } else { UserDefaults.standard.removeObject(forKey: "availabilityReminder") }
+    }
+    @objc func toggleReminder() {
+        guard !reminderAuthorizing else { return }
+        reminderGeneration += 1
+        reminderError = nil
+        if reminder != nil {
+            reminder = nil; saveReminder()
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["quota-available"])
+            return
+        }
+        let now = Date().timeIntervalSince1970
+        guard error == nil, let snapshot, now - snapshot.fetchedAt <= 600,
+              let candidate = AvailabilityReminder.arm(reminderWindows(snapshot.windows), now: now) else {
+            reminderError = "当前额度可用，或缺少有效额度/重置时间；请刷新后重试"
+            refresh(); return
+        }
+        reminderAuthorizing = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] allowed, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.reminderAuthorizing = false
+                if allowed { self.reminder = candidate; self.saveReminder() }
+                else { self.reminderError = "请在系统设置中允许本工具发送通知，再开启提醒" }
+            }
+        }
+    }
+    func checkReminder() {
+        guard !reminderSending, error == nil, let snapshot, var pending = reminder else { return }
+        let ready = pending.recovered(reminderWindows(snapshot.windows), fetchedAt: snapshot.fetchedAt,
+                                      restricted: snapshot.restricted, now: Date().timeIntervalSince1970)
+        reminder = pending; saveReminder()
+        guard ready else { return }
+        reminderSending = true
+        let content = UNMutableNotificationContent()
+        content.title = "Claude 额度已恢复"
+        content.body = "已确认当前额度可用，可以继续使用了。"
+        content.sound = .default
+        let generation = reminderGeneration
+        Task { @MainActor in
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            guard generation == reminderGeneration, reminder != nil else { reminderSending = false; return }
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+                reminderSending = false
+                reminderError = "通知未获允许，提醒已保留；请在系统设置允许通知"
+                return
+            }
+            do {
+                try await center.add(UNNotificationRequest(identifier: "quota-available", content: content, trigger: nil))
+                if generation == reminderGeneration { reminder = nil; reminderError = nil; saveReminder() }
+            } catch { reminderError = "通知发送失败，提醒已保留，将稍后重试" }
+            reminderSending = false
+        }
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .list])
     }
     func item(_ title: String, _ action: Selector?) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -418,6 +518,13 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(option)
         }
         menu.addItem(item(query == nil ? "立即刷新" : "正在刷新…", query == nil ? #selector(refresh) : nil))
+        let alarm = item("额度可用提醒", reminderAuthorizing ? nil : #selector(toggleReminder))
+        alarm.state = reminder == nil ? .off : .on
+        menu.addItem(alarm)
+        if let reminder {
+            menu.addItem(item("等待额度恢复 · " + resetDescription(reminder.due, weekly: true), nil))
+        }
+        if let reminderError { menu.addItem(item(reminderError, nil)) }
         menu.addItem(item("恢复默认位置", #selector(resetPosition)))
         menu.addItem(.separator())
         let toggle = item("显示时间", #selector(toggleClock))
@@ -639,7 +746,48 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
 @main
 struct Main {
     @MainActor static func main() {
+        if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--with-update-lock" {
+            let args = CommandLine.arguments
+            guard args.count >= 5 else { exit(72) }
+            let fd = Darwin.open(args[2], O_RDWR | O_CREAT | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK, mode_t(0o600))
+            guard fd >= 0 else { exit(errno == EWOULDBLOCK || errno == EAGAIN ? 75 : 73) }
+            // 更新不读取交互输入；通过stdin把同一个内核锁传给Node和npm子进程。
+            guard dup2(fd, STDIN_FILENO) >= 0 else { Darwin.close(fd); exit(73) }
+            if fd != STDIN_FILENO { Darwin.close(fd) }
+            var argv = Array(args.dropFirst(3)).map { strdup($0) } + [nil]
+            argv.withUnsafeMutableBufferPointer { buffer in
+                _ = execv(args[3], buffer.baseAddress!)
+            }
+            for value in argv { free(value) }
+            exit(74)
+        }
+
         if CommandLine.arguments.contains("--self-test") {
+            func quota(_ id: String, _ remaining: Double?, _ reset: Double?) -> UsageWindow {
+                UsageWindow(id: id, label: id, name: id, remaining: remaining, resetsAt: reset)
+            }
+            let a = quota("five", 0, 3700), b = quota("week", 0, 7300)
+            precondition(AvailabilityReminder.arm([a, b], now: 100)?.due == 7300)
+            precondition(AvailabilityReminder.arm([quota("five", 0, 10900), b], now: 100)?.due == 10900)
+            precondition(AvailabilityReminder.arm([a, quota("week", 30, 7300)], now: 100)?.due == 3700)
+            precondition(AvailabilityReminder.arm([b], now: 100)?.due == 7300)
+            precondition(AvailabilityReminder.arm([quota("five", 10, 3700)], now: 100) == nil)
+            precondition(AvailabilityReminder.arm([quota("five", nil, 3700)], now: 100) == nil)
+            precondition(AvailabilityReminder.arm([quota("five", 0, nil)], now: 100) == nil)
+            var alarm = AvailabilityReminder.arm([a, b], now: 100)!
+            let restored = try! JSONDecoder().decode(AvailabilityReminder.self, from: JSONEncoder().encode(alarm))
+            precondition(restored.ids == alarm.ids && restored.due == 7300)
+            let usable = [quota("five", 100, 18000), quota("week", 100, 600000)]
+            precondition(!alarm.recovered(usable, fetchedAt: 7300, restricted: false, now: 7299))
+            precondition(!alarm.recovered(usable, fetchedAt: 7200, restricted: false, now: 7400))
+            precondition(!alarm.recovered(usable, fetchedAt: 7300, restricted: false, now: 7500))
+            precondition(!alarm.recovered(usable, fetchedAt: 7400, restricted: true, now: 7400))
+            precondition(!alarm.recovered([usable[0]], fetchedAt: 7400, restricted: false, now: 7400))
+            precondition(!alarm.recovered([quota("five", nil, 18000), usable[1]], fetchedAt: 7400, restricted: false, now: 7400))
+            precondition(alarm.recovered(usable, fetchedAt: 7400, restricted: false, now: 7400))
+            precondition(!alarm.recovered([quota("five", 0, 18000), usable[1]], fetchedAt: 7400, restricted: false, now: 7400))
+            precondition(alarm.due == 18000)
+            print("额度提醒：较晚恢复、单窗口、未知/过期/受限、重启保存及再次耗尽检查通过")
             let preferenceSuite = "easy-auto-update-self-test-" + UUID().uuidString
             let preferences = UserDefaults(suiteName: preferenceSuite)!
             precondition(!preferences.bool(forKey: "automaticUpdatesEnabled"))
