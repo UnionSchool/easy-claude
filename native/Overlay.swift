@@ -200,8 +200,16 @@ func clockText(at date: Date, zone: TimeZone, locale: Locale = .autoupdatingCurr
 func fittedClockFont(for text: String, width: CGFloat, baseSize: CGFloat) -> NSFont {
     let base = NSFont.monospacedDigitSystemFont(ofSize: baseSize, weight: .medium)
     let measured = max(1, (text as NSString).size(withAttributes: [.font: base]).width)
-    let size = min(baseSize, baseSize * max(1, width - 2) / measured)
-    return NSFont.monospacedDigitSystemFont(ofSize: size, weight: .medium)
+    var size = min(baseSize, baseSize * max(1, width - 2) / measured)
+    var font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .medium)
+    // 字体在小字号下的实际字宽不完全按比例缩放，按实测宽度校正。
+    for _ in 0..<6 {
+        let actual = (text as NSString).size(withAttributes: [.font: font]).width
+        if actual <= width { break }
+        size *= width / actual * 0.95
+        font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .medium)
+    }
+    return font
 }
 
 func clockState(at date: Date, zone: TimeZone) -> RingState {
@@ -222,12 +230,14 @@ final class ClockView: RingView {
         style.alignment = .center
         let now = Date()
         let time = clockText(at: now, zone: zone)
+        let timeFont = fittedClockFont(for: time, width: bounds.width, baseSize: 20)
+        let timeWidth = (time as NSString).size(withAttributes: [.font: timeFont]).width
         (time as NSString).draw(in: CGRect(x: 0, y: 17, width: bounds.width, height: 25),
-            withAttributes: [.font: fittedClockFont(for: time, width: bounds.width, baseSize: 20),
+            withAttributes: [.font: timeFont,
                              .foregroundColor: clockState(at: now, zone: zone).color, .paragraphStyle: style])
         let city = cityName
         (city as NSString).draw(in: CGRect(x: 0, y: 1, width: bounds.width, height: 15),
-            withAttributes: [.font: NSFont.systemFont(ofSize: 10),
+            withAttributes: [.font: fittedClockFont(for: city, width: timeWidth, baseSize: 10),
                              .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style])
     }
 }
@@ -292,6 +302,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var clockEnabled = true
     var followIPTimeZone = UserDefaults.standard.bool(forKey: "followIPTimeZone")
     var ipClock = IPClockState()
+    var ipClockCity: String?
     var manualClockZone = TimeZone(identifier: "America/Los_Angeles")!
     var manualClockCity = "硅谷"
     var status: NSStatusItem?
@@ -466,11 +477,12 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     func applyClockTimeZone() {
         clock.zone = ipClock.resolved(manual: manualClockZone, following: followIPTimeZone)
-        clock.cityName = followIPTimeZone && ipClock.zone != nil ? "IP时区" : manualClockCity
+        clock.cityName = followIPTimeZone && ipClock.zone != nil ? (ipClockCity ?? "城市未知") : manualClockCity
         clock.needsDisplay = true
     }
-    func receiveIPTimeZone(_ identifier: String?) {
+    func receiveIPTimeZone(_ identifier: String?, city: String? = nil) {
         _ = ipClock.update(identifier)
+        ipClockCity = ipClock.zone == nil ? nil : city
         applyClockTimeZone()
     }
     @objc func toggleFollowIPTimeZone() {
@@ -495,10 +507,11 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             let value = try? JSONDecoder().decode(PublicIP.self, from: data)
             let text = publicIPText(ip: process.terminationStatus == 0 ? value?.ip : nil, city: value?.city)
             let timezone = process.terminationStatus == 0 ? value?.timezone : nil
+            let city = process.terminationStatus == 0 ? value?.city : nil
             Task { @MainActor in
                 guard let self else { return }
                 self.ipQuery = nil; self.ipText = text
-                self.receiveIPTimeZone(timezone)
+                self.receiveIPTimeZone(timezone, city: city)
             }
         }
         ipQuery = process
@@ -869,13 +882,26 @@ struct Main {
             precondition(ipClockTest.update("Asia/Singapore"))
             precondition(ipClockTest.resolved(manual: manualIPTest, following: true).identifier == "Asia/Singapore")
             _ = NSApplication.shared
+            for time in ["8:52", "12:59", "上午8:52"] {
+                let font = fittedClockFont(for: time, width: 96, baseSize: 20)
+                let width = (time as NSString).size(withAttributes: [.font: font]).width
+                for city in ["Los Angeles", "上海", String(repeating: "W", count: 60)] {
+                    let cityFont = fittedClockFont(for: city, width: width, baseSize: 10)
+                    precondition((city as NSString).size(withAttributes: [.font: cityFont]).width <= width + 0.01)
+                }
+            }
+
             let clockMenuTest = Overlay()
             clockMenuTest.manualClockZone = manualIPTest
             clockMenuTest.manualClockCity = "上海"
             clockMenuTest.followIPTimeZone = true
-            _ = clockMenuTest.ipClock.update("America/Los_Angeles")
+            clockMenuTest.receiveIPTimeZone("America/Los_Angeles", city: "Los Angeles")
             clockMenuTest.applyClockTimeZone()
             precondition(clockMenuTest.clock.zone.identifier == "America/Los_Angeles")
+            precondition(clockMenuTest.clock.cityName == "Los Angeles")
+            clockMenuTest.receiveIPTimeZone("America/Los_Angeles")
+            precondition(clockMenuTest.clock.cityName == "城市未知")
+            clockMenuTest.receiveIPTimeZone("America/Los_Angeles", city: "Los Angeles")
             precondition(!clockMenuTest.makeMenu().items.contains { $0.submenu != nil })
             clockMenuTest.receiveIPTimeZone(nil)
             precondition(clockMenuTest.clock.zone == manualIPTest && clockMenuTest.clock.cityName == "上海")

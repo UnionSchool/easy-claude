@@ -52,9 +52,11 @@
 
 ## 公网IP菜单
 
-- public-ip.js仅访问https://ip.sb/ip与api.ip.sb/geoip/<已验证IP>，Node net.isIP校验IPv4/IPv6，城市仅接受对应IP的受限文本；查询失败显示IP异常，城市未知保留IP。curl启用TLS校验、不跟随重定向，单请求12秒/8KiB上限，环境代理优先，其次系统HTTPS代理，不发送账号凭据。
+- public-ip.js每轮仅请求一次https://ipinfo.io/json，同一响应读取IP、城市、时区；Node net.isIP校验IPv4/IPv6，城市仅接受受限文本；查询失败显示IP异常，城市未知保留IP。curl启用TLS校验、不跟随重定向，单请求12秒/8KiB上限，环境代理优先，其次系统HTTPS代理，不发送账号凭据。
 - native的IP查询独立于额度与前台窗口，启动及每300秒刷新，点击菜单立即刷新，失败不保留旧IP作为当前值。仅内存展示，不写UserDefaults或历史日志；退出终止查询。
 
-- IP地理接口同时读取城市与timezone，必须匹配已获取IP；时区经Intl.DateTimeFormat校验，无效或缺失仅标为时区未知，不回退电脑时区；是否用于时钟由显式跟随开关决定，手动时区配置始终保留。
+- IP地理接口同一响应读取有效IP、城市与timezone；时区经Intl.DateTimeFormat校验，无效或缺失仅标为时区未知，不回退电脑时区；是否用于时钟由显式跟随开关决定，手动时区配置始终保留。
 
 - “跟随IP时区”默认关闭，UserDefaults followIPTimeZone持久化；开启隐藏全部手动时区选择，有效IP时区驱动时钟，失效回退手动时区并提示，成功后自动恢复跟随。关闭恢复原手动城市与时区；不把IP时区写入clockTimeZone/clockCity，不改变系统设置。IP菜单文案为城市名称·IP地址，失败仍IP异常。
+
+- 跟随IP时区时，浮窗时间下方显示IP返回的城市名称（如Los Angeles），不显示“IP时区”占位文字；IP失败恢复原手动城市文字，城市文字居中，宽度不超过时间文字实际宽度，过长缩小字号。
