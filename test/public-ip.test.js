@@ -12,9 +12,9 @@ test('IP和城市固定查询指定服务，城市查询必须针对已获取IP'
       assert.equal(options.timeout, 15000);
       assert.equal(options.maxBuffer, 8192);
       assert.ok(args.includes('-q') && !args.includes('--location'));
-      return { stdout: calls.length === 1 ? '203.0.113.1\n' : JSON.stringify({ ip: '203.0.113.1', city: ' Los Angeles\n' }) };
+      return { stdout: calls.length === 1 ? '203.0.113.1\n' : JSON.stringify({ ip: '203.0.113.1', city: ' Los Angeles\n', timezone: 'America/Los_Angeles' }) };
     } });
-  assert.deepEqual(result, { ip: '203.0.113.1', city: 'Los Angeles' });
+  assert.deepEqual(result, { ip: '203.0.113.1', city: 'Los Angeles', timezone: 'America/Los_Angeles' });
   assert.deepEqual(calls, ['https://ip.sb/ip', 'https://api.ip.sb/geoip/203.0.113.1']);
 });
 
@@ -44,12 +44,29 @@ test('IPv6可查询；城市未知、无效或错误IP不伪造城市', async ()
   for (const response of ['{}', 'invalid', JSON.stringify({ip:'203.0.113.2',city:'Wrong City'}), JSON.stringify({ip:'2001:db8::1',city:null})]) {
     let count = 0;
     const result = await readPublicIP({ platform: 'linux', env: {}, run: async () => ({stdout: ++count === 1 ? '2001:db8::1\n' : response}) });
-    assert.deepEqual(result, { ip: '2001:db8::1', city: null });
+    assert.deepEqual(result, { ip: '2001:db8::1', city: null, timezone: null });
   }
   let count = 0;
   const result = await readPublicIP({ platform: 'linux', env: {}, run: async () => {
     if (++count === 1) return {stdout:'203.0.113.1'};
     throw new Error('geo offline');
   } });
-  assert.deepEqual(result, {ip:'203.0.113.1',city:null});
+  assert.deepEqual(result, {ip:'203.0.113.1',city:null,timezone:null});
+});
+
+
+test('时区独立于城市读取，无效或错误IP的时区保持未知', async () => {
+  for (const [ip, city, timezone, expected] of [
+    ['203.0.113.1', null, 'America/Los_Angeles', 'America/Los_Angeles'],
+    ['203.0.113.1', 'City', 'Invalid/Zone', null],
+    ['203.0.113.1', 'City', null, null],
+    ['203.0.113.2', 'City', 'Asia/Shanghai', null]
+  ]) {
+    let count = 0;
+    const result = await readPublicIP({ platform: 'linux', env: {}, run: async () => ({
+      stdout: ++count === 1 ? '203.0.113.1' : JSON.stringify({ip,city,timezone})
+    }) });
+    assert.equal(result.timezone, expected);
+    assert.equal(result.city, ip === '203.0.113.1' ? city : null);
+  }
 });
