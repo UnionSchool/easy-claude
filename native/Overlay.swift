@@ -455,7 +455,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             refresh(); return
         }
         reminderAuthorizing = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] allowed, _ in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { @Sendable [weak self] allowed, _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.reminderAuthorizing = false
@@ -472,7 +472,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         guard ready else { return }
         reminderSending = true
         let generation = reminderGeneration
-        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+        UNUserNotificationCenter.current().getNotificationSettings { @Sendable [weak self] settings in
             // 旧SDK的设置对象不是Sendable，只把判断结果送回主线程。
             let allowed = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
             Task { @MainActor in
@@ -487,7 +487,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 content.title = "Claude 额度已恢复"
                 content.body = "已确认当前额度可用，可以继续使用了。"
                 content.sound = .default
-                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "quota-available", content: content, trigger: nil)) { [weak self] error in
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "quota-available", content: content, trigger: nil)) { @Sendable [weak self] error in
                     let failed = error != nil
                     Task { @MainActor in
                         guard let self else { return }
