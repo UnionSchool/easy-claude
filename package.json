@@ -1,6 +1,6 @@
 {
   "name": "easy-claude",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Claude Code quota rings and transparent world clock for Claude desktop",
   "type": "module",
   "bin": {
@@ -21,7 +21,8 @@
   "scripts": {
     "test": "node --test",
     "start": "node bin/easy-claude.js",
-    "build:overlay": "node scripts/build-overlay.mjs"
+    "build:overlay": "node scripts/build-overlay.mjs",
+    "test:native": "python3 scripts/test-native-update.py"
   },
   "license": "MIT",
   "author": "UnionSchool",

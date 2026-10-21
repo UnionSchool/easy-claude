@@ -158,15 +158,19 @@ func versionCheckDue(lastAttempt: Double, checkedVersion: String?, currentVersio
     checkedVersion != currentVersion || now - lastAttempt >= 86400
 }
 
-func resetDescription(_ resetsAt: Double?, weekly: Bool, now: Date = Date(), zone: TimeZone = .current) -> String {
+func resetDescription(_ resetsAt: Double?, weekly: Bool, now: Date = Date(), zone: TimeZone = .current,
+                      locale: Locale = .autoupdatingCurrent) -> String {
     guard let resetsAt, resetsAt.isFinite, abs(resetsAt) < 8.64e12 else { return "重置时间未知" }
     let remaining = resetsAt - now.timeIntervalSince1970
     guard remaining > 0 else { return "已到重置时间，等待更新" }
     let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.locale = locale
     formatter.timeZone = zone
-    formatter.dateFormat = weekly ? "d'日' HH:mm" : "HH:mm"
-    let time = formatter.string(from: Date(timeIntervalSince1970: resetsAt))
+    formatter.setLocalizedDateFormatFromTemplate("jm")
+    let date = Date(timeIntervalSince1970: resetsAt)
+    let clock = formatter.string(from: date)
+    formatter.dateFormat = "d'日'"
+    let time = weekly ? "\(formatter.string(from: date)) \(clock)" : clock
     let duration: String
     if weekly {
         if remaining >= 86400 { duration = "\(Int(remaining / 86400))天" }
@@ -233,6 +237,8 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var updater: Process?
     var versionCheck: Process?
     var updateAvailable = false
+    var automaticUpdateError: String?
+    var versionCheckError: String?
     let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知"
     var snapshot: Snapshot?
     var error: String?
@@ -433,6 +439,11 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
             updateItem.setAccessibilityHelp("有新版本可更新")
         }
         menu.addItem(updateItem)
+        let automatic = item("自动更新", #selector(toggleAutomaticUpdates))
+        automatic.state = UserDefaults.standard.bool(forKey: "automaticUpdatesEnabled") ? .on : .off
+        menu.addItem(automatic)
+        if let automaticUpdateError { menu.addItem(item(automaticUpdateError, nil)) }
+        if let versionCheckError { menu.addItem(item(versionCheckError, nil)) }
         menu.addItem(item("退出浮窗", #selector(quit)))
         return menu
     }
@@ -499,10 +510,13 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard versionCheck == nil, !script.isEmpty,
               versionCheckDue(lastAttempt: last, checkedVersion: prefs.string(forKey: "updateCheckedVersion"),
                               currentVersion: appVersion) else { return }
+        if prefs.string(forKey: "updateCheckedVersion") != appVersion {
+            prefs.set(false, forKey: "updateAvailable")
+            updateAvailable = false
+        }
         prefs.set(appVersion, forKey: "updateCheckedVersion")
         prefs.set(Date().timeIntervalSince1970, forKey: "updateLastAttempt")
-        prefs.set(false, forKey: "updateAvailable")
-        updateAvailable = false
+        versionCheckError = nil
         let process = Process(), pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: node)
         process.arguments = [URL(fileURLWithPath: script).deletingLastPathComponent()
@@ -515,20 +529,36 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         process.terminationHandler = { [weak self] process in
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let available = process.terminationStatus == 0 && value?["available"] as? Bool == true
+            let available = process.terminationStatus == 0 ? value?["available"] as? Bool : nil
             Task { @MainActor in
                 guard let self else { return }
                 self.versionCheck = nil
+                guard let available else {
+                    self.versionCheckError = "版本检查失败，保留上次结果"
+                    return
+                }
+                self.versionCheckError = nil
                 self.updateAvailable = available
                 UserDefaults.standard.set(available, forKey: "updateAvailable")
+                if available && UserDefaults.standard.bool(forKey: "automaticUpdatesEnabled") {
+                    self.startUpdate(automatic: true)
+                }
             }
         }
         versionCheck = process
         do { try process.run() }
-        catch { versionCheck = nil }
+        catch { versionCheck = nil; versionCheckError = "版本检查失败，保留上次结果" }
     }
-    @objc func updateVersion() {
+    @objc func toggleAutomaticUpdates() {
+        let prefs = UserDefaults.standard
+        let enabled = !prefs.bool(forKey: "automaticUpdatesEnabled")
+        prefs.set(enabled, forKey: "automaticUpdatesEnabled")
+        if enabled && updateAvailable { startUpdate(automatic: true) }
+    }
+    @objc func updateVersion() { startUpdate(automatic: false) }
+    func startUpdate(automatic: Bool) {
         guard updater == nil else { return }
+        automaticUpdateError = nil
         let cli = URL(fileURLWithPath: script).deletingLastPathComponent()
             .appendingPathComponent("overlay-update.js")
         let process = Process()
@@ -540,22 +570,35 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // npm 输出可能超过管道容量，写临时文件以免等待退出时死锁。
         let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         guard FileManager.default.createFile(atPath: output.path, contents: nil,
-            attributes: [.posixPermissions: 0o600]), let handle = try? FileHandle(forWritingTo: output) else {
-            showUpdateResult("无法创建更新日志，请检查临时目录权限。")
+            attributes: [.posixPermissions: 0o600]), let handle = try? FileHandle(forUpdating: output) else {
+            if automatic { automaticUpdateError = "自动更新失败：无法创建更新日志" }
+            else { showUpdateResult("无法创建更新日志，请检查临时目录权限。") }
+            return
+        }
+        // 先取消文件名，描述符仍可读写；旧浮窗退出后也不会遗留日志。
+        do { try FileManager.default.removeItem(at: output) }
+        catch {
+            try? handle.close()
+            if automatic { automaticUpdateError = "自动更新失败：无法清理临时日志" }
+            else { showUpdateResult("无法清理临时更新日志，请检查临时目录权限。") }
             return
         }
         process.standardOutput = handle
         process.standardError = handle
         process.terminationHandler = { [weak self] process in
+            try? handle.seek(toOffset: 0)
+            let data = (try? handle.readToEnd()) ?? Data()
             try? handle.close()
-            let data = (try? Data(contentsOf: output)) ?? Data()
-            try? FileManager.default.removeItem(at: output)
             let message = String(decoding: data.suffix(4096), as: UTF8.self)
             Task { @MainActor in
                 guard let self else { return }
                 self.updater = nil
-                self.showUpdateResult(process.terminationStatus == 0
-                    ? message : "更新失败，请检查网络或安装目录权限。\n" + message)
+                if automatic {
+                    if process.terminationStatus != 0 { self.automaticUpdateError = "自动更新失败，请点击更新版本查看原因" }
+                } else {
+                    self.showUpdateResult(process.terminationStatus == 0
+                        ? message : "更新失败，请检查网络或安装目录权限。\n" + message)
+                }
             }
         }
         updater = process
@@ -563,8 +606,8 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
         catch {
             updater = nil
             try? handle.close()
-            try? FileManager.default.removeItem(at: output)
-            showUpdateResult("无法启动更新，请重新运行 easy-claude show。")
+            if automatic { automaticUpdateError = "自动更新失败：无法启动更新" }
+            else { showUpdateResult("无法启动更新，请重新运行 easy-claude show。") }
         }
     }
     func showUpdateResult(_ message: String) {
@@ -588,6 +631,14 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate {
 struct Main {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--self-test") {
+            let preferenceSuite = "easy-auto-update-self-test-" + UUID().uuidString
+            let preferences = UserDefaults(suiteName: preferenceSuite)!
+            precondition(!preferences.bool(forKey: "automaticUpdatesEnabled"))
+            preferences.set(true, forKey: "automaticUpdatesEnabled")
+            precondition(UserDefaults(suiteName: preferenceSuite)!.bool(forKey: "automaticUpdatesEnabled"))
+            preferences.set(false, forKey: "automaticUpdatesEnabled")
+            precondition(!preferences.bool(forKey: "automaticUpdatesEnabled"))
+            preferences.removePersistentDomain(forName: preferenceSuite)
             precondition(!versionCheckDue(lastAttempt: 100, checkedVersion: "1.0.0", currentVersion: "1.0.0", now: 86499))
             precondition(versionCheckDue(lastAttempt: 100, checkedVersion: "1.0.0", currentVersion: "1.0.0", now: 86500))
             precondition(versionCheckDue(lastAttempt: 100, checkedVersion: nil, currentVersion: "1.0.0", now: 100))
@@ -596,17 +647,31 @@ struct Main {
             precondition(ClockCity.presets.allSatisfy { TimeZone(identifier: $0.identifier) != nil })
             let countdownStart = ISO8601DateFormatter().date(from: "2026-10-15T04:57:00Z")!
             let countdownUTC = TimeZone(secondsFromGMT: 0)!
-            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 10920, weekly: false, now: countdownStart, zone: countdownUTC) == "3小时2分后 07:59 重置")
+            let afternoon = ISO8601DateFormatter().date(from: "2026-10-21T14:30:00Z")!
+            let morning = ISO8601DateFormatter().date(from: "2026-10-21T02:30:00Z")!
+            for weekly in [false, true] {
+                let us = resetDescription(afternoon.timeIntervalSince1970, weekly: weekly,
+                    now: morning, zone: countdownUTC, locale: Locale(identifier: "en_US"))
+                precondition(us.contains("2:30") && us.contains("PM") && !us.contains("14:30"))
+                precondition(!weekly || us.contains("21日"))
+                let gb = resetDescription(afternoon.timeIntervalSince1970, weekly: weekly,
+                    now: morning, zone: countdownUTC, locale: Locale(identifier: "en_GB"))
+                precondition(gb.contains("14:30") && !gb.contains("PM"))
+                let am = resetDescription(morning.timeIntervalSince1970, weekly: weekly,
+                    now: morning.addingTimeInterval(-60), zone: countdownUTC, locale: Locale(identifier: "en_US"))
+                precondition(am.contains("2:30") && am.contains("AM"))
+            }
+            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 10920, weekly: false, now: countdownStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "3小时2分后 07:59 重置")
             let weekStart = ISO8601DateFormatter().date(from: "2026-10-14T08:03:00Z")!
-            precondition(resetDescription(weekStart.timeIntervalSince1970 + 345360, weekly: true, now: weekStart, zone: countdownUTC) == "3天后 18日 07:59 重置")
+            precondition(resetDescription(weekStart.timeIntervalSince1970 + 345360, weekly: true, now: weekStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "3天后 18日 07:59 重置")
             precondition(resetDescription(nil, weekly: true) == "重置时间未知")
             precondition(resetDescription(countdownStart.timeIntervalSince1970, weekly: false, now: countdownStart) == "已到重置时间，等待更新")
-            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 1, weekly: false, now: countdownStart, zone: countdownUTC) == "1分后 04:57 重置")
-            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 86160, weekly: true, now: countdownStart, zone: countdownUTC) == "23小时后 16日 04:53 重置")
-            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 120, weekly: true, now: countdownStart, zone: countdownUTC) == "2分钟后 15日 04:59 重置")
-            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 86400, weekly: true, now: countdownStart, zone: countdownUTC) == "1天后 16日 04:57 重置")
-            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 86399, weekly: true, now: countdownStart, zone: countdownUTC) == "23小时后 16日 04:56 重置")
-            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 3599, weekly: false, now: countdownStart, zone: countdownUTC) == "1小时后 05:56 重置")
+            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 1, weekly: false, now: countdownStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "1分后 04:57 重置")
+            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 86160, weekly: true, now: countdownStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "23小时后 16日 04:53 重置")
+            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 120, weekly: true, now: countdownStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "2分钟后 15日 04:59 重置")
+            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 86400, weekly: true, now: countdownStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "1天后 16日 04:57 重置")
+            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 86399, weekly: true, now: countdownStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "23小时后 16日 04:56 重置")
+            precondition(resetDescription(countdownStart.timeIntervalSince1970 + 3599, weekly: false, now: countdownStart, zone: countdownUTC, locale: Locale(identifier: "en_GB")) == "1小时后 05:56 重置")
             let testRing = RingView()
             testRing.showFiveHourRing = false
             precondition(testRing.displaysWeeklyPercentage)

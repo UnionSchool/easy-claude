@@ -54,14 +54,17 @@ function runNpm(command, args) {
 }
 
 export async function updatePackage(name, { root = fileURLToPath(new URL('../', import.meta.url)),
-  getNpmCli = findNpmCli, getLatest = readLatest, currentVersion = version,
+  getNpmCli = findNpmCli, getLatest = readLatest,
+  currentVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
   run = runNpm, platform = process.platform } = {}) {
   if (!['easy-codex', 'easy-claude'].includes(name)) throw new Error('不支持的更新包名。');
   const npmCli = await getNpmCli();
   const latest = await getLatest(npmCli, name);
   if (!isNewer(latest, currentVersion)) {
-    console.log(`${name} 当前 ${currentVersion}，npm 最新 ${latest}，无需更新。`);
-    return;
+    console.log(currentVersion === latest
+      ? `${name} 已经是最新版本（${currentVersion}）。`
+      : `${name} 当前版本 ${currentVersion} 高于 npm 最新版本 ${latest}，无需更新。`);
+    return false;
   }
   const prefix = installedPrefix(root, platform);
   // 先在线检查再锁定版本，避免安装阶段复用旧 latest 缓存而降级。
@@ -69,6 +72,7 @@ export async function updatePackage(name, { root = fileURLToPath(new URL('../', 
     '--prefer-online', '--registry=https://registry.npmjs.org', `${name}@${latest}`];
   await run(process.execPath, args);
   console.log(`${name} 已更新到 ${latest}。`);
+  return true;
 }
 
 export async function checkUpdate(name, { getNpmCli = findNpmCli, getLatest = readLatest,
