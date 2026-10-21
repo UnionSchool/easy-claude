@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='easy-reminder-test-') as temporary:
                     str(work / 'overlay-query.cjs'), os.environ['PATH'], ''], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
-                    assert process.poll() is None, process.communicate()
+                    assert process.poll() is None, (process.returncode, process.communicate())
                     if (work / 'queries').exists() and (work / 'queries').read_text().count('query') > restart:
                         break
                     time.sleep(.1)

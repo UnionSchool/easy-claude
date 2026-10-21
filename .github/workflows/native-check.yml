@@ -1,0 +1,26 @@
+name: Verify native features
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run build:overlay
+      - run: npm run test:reminder
+      - name: Collect native diagnostics
+        if: failure()
+        run: |
+          mkdir -p /tmp/easy-native-diagnostics
+          cp -R ~/Library/Logs/DiagnosticReports /tmp/easy-native-diagnostics/ 2>/dev/null || true
+          /usr/bin/log show --last 3m --style compact --predicate 'process == "EasyCodexOverlay" OR process == "EasyClaudeOverlay" OR process == "usernoted"' > /tmp/easy-native-diagnostics/system.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: native-diagnostics
+          path: /tmp/easy-native-diagnostics
