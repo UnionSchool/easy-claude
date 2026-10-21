@@ -471,25 +471,34 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         reminder = pending; saveReminder()
         guard ready else { return }
         reminderSending = true
-        let content = UNMutableNotificationContent()
-        content.title = "Claude 额度已恢复"
-        content.body = "已确认当前额度可用，可以继续使用了。"
-        content.sound = .default
         let generation = reminderGeneration
-        Task { @MainActor in
-            let center = UNUserNotificationCenter.current()
-            let settings = await center.notificationSettings()
-            guard generation == reminderGeneration, reminder != nil else { reminderSending = false; return }
-            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
-                reminderSending = false
-                reminderError = "通知未获允许，提醒已保留；请在系统设置允许通知"
-                return
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            // 旧SDK的设置对象不是Sendable，只把判断结果送回主线程。
+            let allowed = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+            Task { @MainActor in
+                guard let self else { return }
+                guard generation == self.reminderGeneration, self.reminder != nil else { self.reminderSending = false; return }
+                guard allowed else {
+                    self.reminderSending = false
+                    self.reminderError = "通知未获允许，提醒已保留；请在系统设置允许通知"
+                    return
+                }
+                let content = UNMutableNotificationContent()
+                content.title = "Claude 额度已恢复"
+                content.body = "已确认当前额度可用，可以继续使用了。"
+                content.sound = .default
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "quota-available", content: content, trigger: nil)) { [weak self] error in
+                    let failed = error != nil
+                    Task { @MainActor in
+                        guard let self else { return }
+                        if generation == self.reminderGeneration {
+                            if !failed { self.reminder = nil; self.reminderError = nil; self.saveReminder() }
+                            else { self.reminderError = "通知发送失败，提醒已保留，将稍后重试" }
+                        }
+                        self.reminderSending = false
+                    }
+                }
             }
-            do {
-                try await center.add(UNNotificationRequest(identifier: "quota-available", content: content, trigger: nil))
-                if generation == reminderGeneration { reminder = nil; reminderError = nil; saveReminder() }
-            } catch { reminderError = "通知发送失败，提醒已保留，将稍后重试" }
-            reminderSending = false
         }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
