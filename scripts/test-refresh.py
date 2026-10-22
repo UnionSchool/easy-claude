@@ -7,13 +7,13 @@ entry = r'''
  @MainActor static func main() throws {
   _ = NSApplication.shared
   var schedule = UsageRefreshSchedule()
-  for delay: Double in [120, 240, 480, 900, 900] {
+  for delay: Double in [600, 900, 900] {
    schedule.receive(rateLimited:true,succeeded:false,now:1000)
    precondition(schedule.nextAllowedAt == 1000 + delay)
    precondition(!schedule.allows(1000 + delay - 0.001) && schedule.allows(1000 + delay))
   }
   schedule.receive(rateLimited:false,succeeded:false,now:2000)
-  precondition(schedule.rateLimitCount == 4)
+  precondition(schedule.rateLimitCount == 2)
   schedule.receive(rateLimited:false,succeeded:true,now:3000)
   precondition(schedule.rateLimitCount == 0 && schedule.allows(3000))
   let owner = Overlay()
@@ -45,7 +45,7 @@ entry = r'''
    }
    precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier == front)
   }
-  print("PASS 60-second schedule: 429 backoff 2/4/8/15m, cooldown gate, in-flight guard, success recovery; foreground app unchanged")
+  print("PASS 300-second schedule: 429 backoff 10/15m, cooldown gate, in-flight guard, success recovery; foreground app unchanged")
  }
 }
 '''

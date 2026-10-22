@@ -4,15 +4,15 @@
 
 A lightweight companion for Claude: read CLI account usage, show transparent usage rings and a world clock, and manage them from a native macOS menu bar panel. No model calls or changes to the official application.
 
-## v1.0.2 release notes
+## v1.0.3 release notes
 
-- Chinese/English UI and CLI, following the system by default; save a manual language choice in **More settings → Language**.
-- English README by default, with a linked Simplified Chinese version.
-- Time first, with a half-size period suffix (`10:09 AM` / `10:09 上午`) and the city below; preserve the system 12/24-hour format.
-- Consistent settings row heights and spacing in both languages.
-- Refresh usage every minute; HTTP 429 uses 2/4/8/15-minute backoff across automatic, manual and reminder queries, resetting after success. Halve the gap below the collapsed panel’s network exit.
+- Refresh usage every five minutes; keep one-minute online confirmation when a reset or availability alert is due.
+- Keep usage valid between polls with a ten-minute stale-data threshold; errors and expired windows remain explicit.
+- HTTP 429 pauses queries for 10 minutes, then up to 15 minutes; success restores normal polling. Manual and reminder queries obey the same cooldown.
+- Keep the half-size AM/PM or Chinese day period beside the floating time, with the city below.
+- Verify background quota refresh with isolated continuous-typing and marked-text checks; do not activate the official application.
 
-[Release history](CHANGELOG.md) · [1.0.2 development and verification](https://github.com/UnionSchool/easy-claude/blob/main/docs/版本/1.0.2开发管理.md)
+[Release history](CHANGELOG.md) · [1.0.3 development and verification](https://github.com/UnionSchool/easy-claude/blob/main/docs/版本/1.0.3开发管理.md)
 
 ## Install and run
 
@@ -35,7 +35,7 @@ claude auth login
 
 CLI and desktop login are separate. This tool cannot verify that their accounts match. Missing or stale data is never treated as full or zero usage. API key balances and current conversation context are outside its scope.
 
-Usage refreshes every minute. HTTP 429 pauses requests for 2, 4, 8, then at most 15 minutes after repeated rate limits. Manual refresh and availability alerts respect the same cooldown. A successful query restores the one-minute interval; query failures never imply availability.
+Usage refreshes every five minutes; due resets and availability alerts are confirmed once per minute. HTTP 429 pauses requests for 10 minutes, then up to 15 minutes. Manual refresh and alerts respect the same cooldown. A successful query restores the five-minute interval; query failures never imply availability.
 
 ## Usage rings and recovery
 

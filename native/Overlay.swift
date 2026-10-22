@@ -149,8 +149,8 @@ struct UsageRefreshSchedule {
     func allows(_ now: Double) -> Bool { now >= nextAllowedAt }
     mutating func receive(rateLimited: Bool, succeeded: Bool, now: Double) {
         if rateLimited {
-            rateLimitCount = min(rateLimitCount + 1, 4)
-            nextAllowedAt = now + min(900, 120 * pow(2, Double(rateLimitCount - 1)))
+            rateLimitCount = min(rateLimitCount + 1, 2)
+            nextAllowedAt = now + min(900, usageRefreshInterval * pow(2, Double(rateLimitCount)))
         } else if succeeded {
             rateLimitCount = 0
             nextAllowedAt = 0
@@ -521,7 +521,8 @@ enum LoginStartup {
 let controlProduct = "Claude"
 let controlLoginName = "Claude Code"
 let controlLoginCommand = "claude auth login"
-let controlStaleSeconds: Double = 600
+let usageRefreshInterval: TimeInterval = 300
+let controlStaleSeconds: Double = usageRefreshInterval * 2
 func controlQuotas(_ windows: [UsageWindow]) -> [ControlQuota] { return [windows.first { $0.id == "five_hour:primary" }.map { ControlQuota(window: $0, weekly: false) }, windows.first { $0.id == "seven_day:primary" }.map { ControlQuota(window: $0, weekly: true) }].compactMap { $0 } }
 
 struct ControlQuota: Identifiable {
@@ -962,7 +963,10 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     @objc func tick() {
         checkVersionIfNeeded()
         if Date().timeIntervalSince(ipLastAttempt) >= 300 { refreshIP() }
-        if Date().timeIntervalSince(lastAttempt) >= 60 { refresh() }
+        let now = Date()
+        let resetDue = snapshot?.windows.contains { $0.resetsAt.map { $0 <= now.timeIntervalSince1970 } ?? false } ?? false
+        let reminderDue = reminder.map { $0.due <= now.timeIntervalSince1970 } ?? false
+        if now.timeIntervalSince(lastAttempt) >= (resetDue || reminderDue ? 60 : usageRefreshInterval) { refresh() }
         refreshControls()
         guard let rect = targetWindow() else { hide(); lastRect = nil; return }
         lastRect = rect

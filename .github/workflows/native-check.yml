@@ -12,6 +12,7 @@ jobs:
         with:
           node-version: 24
       - run: npm run build:overlay
+      - run: npm run test:polling
       - run: npm run test:reminder
       - name: Collect native diagnostics
         if: failure()

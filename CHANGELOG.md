@@ -1,5 +1,13 @@
 # 更新记录
 
+## 1.0.3
+
+- Refresh usage every five minutes; keep one-minute online confirmation when a reset or availability alert is due.
+- Keep usage valid between polls with a ten-minute stale-data threshold; errors and expired windows remain explicit.
+- HTTP 429 pauses queries for 10 minutes, then up to 15 minutes; success restores normal polling. Manual and reminder queries obey the same cooldown.
+- Keep the half-size AM/PM or Chinese day period beside the floating time, with the city below.
+- Verify background quota refresh with isolated continuous-typing and marked-text checks; do not activate the official application.
+
 ## 1.0.2
 
 - Refresh usage every minute. HTTP 429 pauses all refresh entry points for 2/4/8/15 minutes (capped); successful queries restore the normal interval.
