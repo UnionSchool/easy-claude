@@ -187,11 +187,30 @@ func resetDescription(_ resetsAt: Double?, weekly: Bool, now: Date = Date(), zon
     return "\(duration)后 \(time) 重置"
 }
 
+func clockPeriod(at date: Date, zone: TimeZone) -> String {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    switch calendar.component(.hour, from: date) {
+    case 0..<6: return "凌晨"
+    case 6..<12: return "上午"
+    case 12..<18: return "下午"
+    case 18..<21: return "晚上"
+    default: return "深夜"
+    }
+}
+
 func clockText(at date: Date, zone: TimeZone, locale: Locale = .autoupdatingCurrent) -> String {
     let formatter = DateFormatter()
     formatter.locale = locale
     formatter.timeZone = zone
     formatter.setLocalizedDateFormatFromTemplate("jm")
+    if locale.hourCycle == .oneToTwelve || locale.hourCycle == .zeroToEleven {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = calendar.component(.hour, from: date) == 0 ? "HH:mm" : "h:mm"
+        return "\(clockPeriod(at: date, zone: zone)) \(formatter.string(from: date))"
+    }
     return formatter.string(from: date)
 }
 
@@ -289,6 +308,29 @@ struct AvailabilityReminder: Codable {
     }
 }
 func reminderWindows(_ windows: [UsageWindow]) -> [UsageWindow] { windows.filter { ["five_hour:primary", "seven_day:primary"].contains($0.id) } }
+
+enum LoginStartup {
+    static let label = "com.unionschool.easy-claude.login"
+    static var file: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/" + label + ".plist")
+    }
+    static func enabled(at file: URL = file) -> Bool { FileManager.default.fileExists(atPath: file.path) }
+    static func setEnabled(_ enabled: Bool, node: String, cli: String, environment: [String: String], at file: URL = file) throws {
+        if !enabled {
+            if self.enabled(at: file) { try FileManager.default.removeItem(at: file) }
+            return
+        }
+        guard node.hasPrefix("/"), cli.hasPrefix("/"),
+              FileManager.default.isExecutableFile(atPath: node), FileManager.default.fileExists(atPath: cli) else {
+            throw NSError(domain: label, code: 1, userInfo: [NSLocalizedDescriptionKey: "启动路径无效，请从正式安装的命令重新打开浮窗"])
+        }
+        let config: [String: Any] = ["Label": label, "ProgramArguments": [node, cli, "show"],
+                                    "RunAtLoad": true, "EnvironmentVariables": environment]
+        let data = try PropertyListSerialization.data(fromPropertyList: config, format: .xml, options: 0)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: file, options: .atomic)
+    }
+}
 
 @MainActor
 final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
@@ -664,8 +706,26 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         menu.addItem(automatic)
         if let automaticUpdateError { menu.addItem(item(automaticUpdateError, nil)) }
         if let versionCheckError { menu.addItem(item(versionCheckError, nil)) }
+        let startup = item("开机启动", #selector(toggleLoginStartup))
+        startup.state = LoginStartup.enabled() ? .on : .off
+        startup.toolTip = "登录当前macOS用户后自动打开浮窗"
+        menu.addItem(startup)
         menu.addItem(item("退出浮窗", #selector(quit)))
         return menu
+    }
+    @objc func toggleLoginStartup() {
+        do {
+            let cli = URL(fileURLWithPath: script).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("bin/easy-claude.js").path
+            let environment = ["PATH": searchPath]
+
+            try LoginStartup.setEnabled(!LoginStartup.enabled(), node: node, cli: cli, environment: environment)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "无法设置开机启动"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -882,6 +942,39 @@ struct Main {
             precondition(ipClockTest.update("Asia/Singapore"))
             precondition(ipClockTest.resolved(manual: manualIPTest, following: true).identifier == "Asia/Singapore")
             _ = NSApplication.shared
+            let periodZone = TimeZone(secondsFromGMT: 0)!
+            for (minutes, expected) in [(0,"凌晨"),(359,"凌晨"),(360,"上午"),(719,"上午"),(720,"下午"),(1079,"下午"),(1080,"晚上"),(1259,"晚上"),(1260,"深夜"),(1439,"深夜")] {
+                let date = Date(timeIntervalSince1970: Double(minutes * 60))
+                precondition(clockPeriod(at: date, zone: periodZone) == expected)
+                precondition(clockText(at: date, zone: periodZone, locale: Locale(identifier: "en_US")).contains(expected))
+            }
+            let midnight = Date(timeIntervalSince1970: 12 * 60)
+            precondition(clockText(at: midnight, zone: periodZone, locale: Locale(identifier: "en_US")) == "凌晨 00:12")
+            precondition(clockText(at: midnight, zone: periodZone, locale: Locale(identifier: "en_GB")) == "00:12")
+            precondition(clockText(at: Date(timeIntervalSince1970: 12 * 3600 + 12 * 60), zone: periodZone, locale: Locale(identifier: "en_US")) == "下午 12:12")
+            precondition(clockPeriod(at: midnight, zone: TimeZone(identifier: "Asia/Shanghai")!) == "上午")
+            let startupTest = FileManager.default.temporaryDirectory.appendingPathComponent("easy-startup-" + UUID().uuidString)
+            let startupFile = startupTest.appendingPathComponent("launch.plist")
+            do {
+                defer { try? FileManager.default.removeItem(at: startupTest) }
+                precondition(!LoginStartup.enabled(at: startupFile))
+                try FileManager.default.createDirectory(at: startupTest, withIntermediateDirectories: true)
+                let cli = startupTest.appendingPathComponent("tool with spaces.js")
+                try Data().write(to: cli)
+                try LoginStartup.setEnabled(true, node: "/usr/bin/true", cli: cli.path, environment: ["PATH":"/usr/bin"], at: startupFile)
+                precondition(LoginStartup.enabled(at: startupFile))
+                let config = try PropertyListSerialization.propertyList(from: Data(contentsOf: startupFile), options: [], format: nil) as! [String: Any]
+                precondition(config["ProgramArguments"] as? [String] == ["/usr/bin/true", cli.path, "show"])
+                precondition(config["RunAtLoad"] as? Bool == true && config["KeepAlive"] == nil)
+                try LoginStartup.setEnabled(false, node: "", cli: "", environment: [:], at: startupFile)
+                precondition(!LoginStartup.enabled(at: startupFile))
+                do {
+                    try LoginStartup.setEnabled(true, node: "relative", cli: cli.path, environment: [:], at: startupFile)
+                    preconditionFailure("无效启动路径不得保存")
+                } catch { precondition(!LoginStartup.enabled(at: startupFile)) }
+            } catch { preconditionFailure("登录启动配置测试失败：\(error)") }
+            print("12小时时段边界、零点/正午及登录启动开关自检通过")
+
             for time in ["8:52", "12:59", "上午8:52"] {
                 let font = fittedClockFont(for: time, width: 96, baseSize: 20)
                 let width = (time as NSString).size(withAttributes: [.font: font]).width
@@ -957,13 +1050,13 @@ struct Main {
             let afternoon = ISO8601DateFormatter().date(from: "2026-10-21T14:30:00Z")!
             for identifier in ["en_US", "en_GB", "zh_CN"] {
                 let text = clockText(at: afternoon, zone: countdownUTC, locale: Locale(identifier: identifier))
-                if identifier == "en_US" { precondition(text.contains("PM") && !text.contains("14:30")) }
+                if identifier == "en_US" { precondition(text.contains("下午") && !text.contains("14:30")) }
                 else { precondition(text == "14:30") }
                 let font = fittedClockFont(for: text, width: 96, baseSize: 20)
                 precondition((text as NSString).size(withAttributes: [.font: font]).width <= 96 - 1)
             }
             let laClock = clockText(at: afternoon, zone: TimeZone(identifier: "America/Los_Angeles")!, locale: Locale(identifier: "en_US"))
-            precondition(laClock.contains("7:30") && laClock.contains("AM"))
+            precondition(laClock.contains("7:30") && laClock.contains("上午"))
 
             let morning = ISO8601DateFormatter().date(from: "2026-10-21T02:30:00Z")!
             for weekly in [false, true] {
