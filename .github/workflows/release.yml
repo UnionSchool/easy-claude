@@ -21,6 +21,7 @@ jobs:
         run: node --input-type=module -e "import p from './package.json' with {type:'json'}; if (process.env.GITHUB_REF_NAME !== 'v' + p.version) throw new Error('Tag and package version must match');"
       - run: npm test
       - run: npm run build:overlay
+      - run: npm run test:controls
       - run: npm run test:lock
       - run: npm run test:native
       - run: npm run test:reminder

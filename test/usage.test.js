@@ -39,3 +39,11 @@ test('区分登录失效和服务拒绝，403 不误导为重新登录', async (
   await assert.rejects(request(401), /HTTP 401.*claude auth login/);
   await assert.rejects(request(403), error => error.message.includes('HTTP 403') && error.message.includes('/usage') && !error.message.includes('claude auth login'));
 });
+
+test('认证状态明确分类，403和网络错误不能冒充未登录', async () => {
+  assert.throws(() => credentialToken('{}'), e => e.code === 'auth_required');
+  assert.throws(() => credentialToken(JSON.stringify({claudeAiOauth:{accessToken:'test-only',expiresAt:1}}),100), e => e.code === 'auth_expired');
+  for (const [status, expected] of [[401,'auth_expired'],[403,undefined],[429,undefined],[500,undefined]]) {
+    await assert.rejects(readUsage({getToken:async()=>'test-only',fetchImpl:async()=>new Response('',{status})}), e => e.code === expected);
+  }
+});

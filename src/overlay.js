@@ -13,5 +13,5 @@ export async function launchOverlay({ platform = process.platform, check = acces
   catch { throw new Error('无法退出旧浮窗，请从菜单退出后重试。'); }
   await run('/usr/bin/open', ['-g', '-a', app, '--args',
     process.execPath, fileURLToPath(new URL('./overlay-query.js', import.meta.url)), process.env.PATH ?? '', process.env.CLAUDE_CONFIG_DIR ?? '']);
-  console.log('额度与电子时钟浮窗已启动；Claude 在前台时显示。拖动调整位置，右键或菜单栏 EA 可设置时区、查看双环额度和退出。');
+  console.log('额度与电子时钟浮窗已启动；Claude 在前台时显示。拖动调整位置，右键或状态栏图标可打开控制面板，右键保留兼容菜单。');
 }

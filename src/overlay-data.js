@@ -23,3 +23,8 @@ export function overlayData(result, now = Date.now()) {
   }
   return { windows, detail, fetchedAt: now / 1000, restricted: result.ordinaryUsageAllowed === false };
 }
+
+export function overlayError(error) {
+  return { error: error?.message || '额度查询失败',
+    errorCode: ['auth_required','auth_expired'].includes(error?.code) ? error.code : 'query_failed' };
+}

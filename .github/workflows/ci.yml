@@ -16,4 +16,5 @@ jobs:
           node-version: 24
       - run: npm test
       - run: npm run build:overlay
+      - run: npm run test:controls
       - run: npm pack --dry-run

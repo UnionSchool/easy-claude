@@ -1,5 +1,5 @@
 import { readUsage } from './usage.js';
-import { overlayData } from './overlay-data.js';
+import { overlayData, overlayError } from './overlay-data.js';
 const controller = new AbortController();
 process.once('SIGTERM', () => controller.abort());
 process.once('SIGINT', () => controller.abort());
@@ -9,6 +9,6 @@ try {
   if (Buffer.byteLength(text) > 12000) throw new Error('额度响应过大，请使用 easy-claude 查看完整数据。');
   console.log(text);
 } catch (error) {
-  console.log(JSON.stringify({ error: error.message }));
+  console.log(JSON.stringify(overlayError(error)));
   process.exitCode = 1;
 }

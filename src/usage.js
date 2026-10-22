@@ -11,8 +11,8 @@ const loginMessage = '请执行 claude auth login 登录与 Claude 桌面相同�
 export function credentialToken(raw, now = Date.now()) {
   let auth;
   try { auth = JSON.parse(raw)?.claudeAiOauth; } catch { throw new Error(`Claude Code 登录数据格式不受支持。${loginMessage}`); }
-  if (!auth || typeof auth.accessToken !== 'string' || !auth.accessToken.trim()) throw new Error(loginMessage);
-  if (Number.isFinite(auth.expiresAt) && auth.expiresAt <= now) throw new Error(`Claude Code 登录已过期。${loginMessage}`);
+  if (!auth || typeof auth.accessToken !== 'string' || !auth.accessToken.trim()) throw Object.assign(new Error(loginMessage), { code: 'auth_required' });
+  if (Number.isFinite(auth.expiresAt) && auth.expiresAt <= now) throw Object.assign(new Error(`Claude Code 登录已过期。${loginMessage}`), { code: 'auth_expired' });
   return auth.accessToken;
 }
 
@@ -25,7 +25,7 @@ export async function loadToken({ signal } = {}) {
   }
   if (!raw) {
     try { raw = await readFile(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), '.credentials.json'), { encoding: 'utf8', signal }); }
-    catch { throw new Error(signal?.aborted ? '查询已取消。' : `未找到可读取的 Claude Code 订阅登录。${loginMessage}`); }
+    catch { throw Object.assign(new Error(signal?.aborted ? '查询已取消。' : `未找到可读取的 Claude Code 订阅登录。${loginMessage}`), { code: signal?.aborted ? undefined : 'auth_required' }); }
   }
   return credentialToken(raw);
 }
@@ -62,7 +62,7 @@ export async function readUsage({ signal, timeoutMs = 15000, getToken = loadToke
       headers: { authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', accept: 'application/json' },
       redirect: 'error', signal: controller.signal,
     }).catch(() => { throw new Error('无法连接 Claude 额度服务，请检查网络。'); });
-    if (response.status === 401) throw new Error(`订阅登录已失效（HTTP 401）。${loginMessage}`);
+    if (response.status === 401) throw Object.assign(new Error(`订阅登录已失效（HTTP 401）。${loginMessage}`), { code: 'auth_expired' });
     if (response.status === 403) throw new Error('Claude 官方额度服务拒绝访问（HTTP 403）。可能是账号权限、网络访问限制或接口兼容变化；请先检查 Claude Code 的 /usage，不能仅据此判断登录已过期。');
     if (response.status === 429) throw new Error('额度查询过于频繁，请稍后再试。');
     if (!response.ok) throw new Error(`Claude 额度服务暂不可用（HTTP ${response.status}）。`);

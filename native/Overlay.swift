@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import CoreGraphics
 import Darwin
 import UserNotifications
@@ -16,8 +17,9 @@ struct Snapshot: Decodable {
     var fetchedAt: Double = 0
     var restricted: Bool = false
     var error: String?
+    var errorCode: String?
 
-    enum CodingKeys: CodingKey { case windows, detail, fetchedAt, restricted, error }
+    enum CodingKeys: CodingKey { case windows, detail, fetchedAt, restricted, error, errorCode }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         windows = try c.decodeIfPresent([UsageWindow].self, forKey: .windows) ?? []
@@ -25,6 +27,7 @@ struct Snapshot: Decodable {
         fetchedAt = try c.decodeIfPresent(Double.self, forKey: .fetchedAt) ?? 0
         restricted = try c.decodeIfPresent(Bool.self, forKey: .restricted) ?? false
         error = try c.decodeIfPresent(String.self, forKey: .error)
+        errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
     }
 }
 
@@ -332,8 +335,265 @@ enum LoginStartup {
     }
 }
 
+let controlProduct = "Claude"
+let controlLoginName = "Claude Code"
+let controlLoginCommand = "claude auth login"
+let controlStaleSeconds: Double = 600
+func controlQuotas(_ windows: [UsageWindow]) -> [ControlQuota] { return [windows.first { $0.id == "five_hour:primary" }.map { ControlQuota(window: $0, weekly: false) }, windows.first { $0.id == "seven_day:primary" }.map { ControlQuota(window: $0, weekly: true) }].compactMap { $0 } }
+
+struct ControlQuota: Identifiable {
+    let window: UsageWindow
+    let weekly: Bool
+    var id: String { window.id }
+    var title: String { weekly ? "周额度" : "5小时" }
+}
+struct ControlState {
+    var mode: String
+    var text: String
+    var headline: String
+    var detail: String
+    var quotas: [ControlQuota]
+    var login: Bool { mode == "auth_required" || mode == "auth_expired" }
+}
+func recoveryCountdown(_ reset: Double, now: Double) -> String {
+    let seconds = reset - now
+    guard reset.isFinite, now.isFinite, seconds < 8.64e12 else { return "未知" }
+    guard seconds > 0 else { return "确认中" }
+    if seconds >= 86400 { return "\(Int(seconds / 86400))天" }
+    let minutes = Int(ceil(seconds / 60)), hours = minutes / 60
+    return (hours > 0 ? "\(hours)小时" : "") + (minutes % 60 > 0 ? "\(minutes % 60)分" : "")
+}
+func controlState(snapshot: Snapshot?, error: String?, code: String?, weeklySelected: Bool, now: Double) -> ControlState {
+    let rows = controlQuotas(snapshot?.windows ?? [])
+    if let error {
+        let auth = code == "auth_required" || code == "auth_expired"
+        let title = code == "auth_required" ? "未登录" : code == "auth_expired" ? "登录已过期" : "查询失败"
+        return ControlState(mode: auth ? code! : "failed", text: title, headline: title, detail: error, quotas: [])
+    }
+    guard let snapshot else { return ControlState(mode: "loading", text: "—", headline: "正在读取", detail: "正在查询本机CLI账号额度", quotas: []) }
+    guard now - snapshot.fetchedAt <= controlStaleSeconds, snapshot.fetchedAt <= now + 5,
+          !rows.isEmpty, rows.allSatisfy({ row in
+              guard let remaining = row.window.remaining, remaining.isFinite, (0...100).contains(remaining) else { return false }
+              if let reset = row.window.resetsAt, !reset.isFinite || abs(reset) >= 8.64e12 { return false }
+              return true
+          }) else { return ControlState(mode: "unknown", text: "—", headline: "额度未知", detail: "等待有效的额度数据，请重新检测", quotas: rows) }
+    let blocked = rows.filter { $0.window.remaining == 0 }
+    if rows.contains(where: { $0.window.resetsAt.map { $0 <= now } ?? false }) {
+        return ControlState(mode: "verifying", text: "确认中", headline: "正在确认恢复", detail: "重置时刻已到，需服务端确认后再显示可用", quotas: rows)
+    }
+    if !blocked.isEmpty {
+        guard blocked.allSatisfy({ $0.window.resetsAt.map { $0.isFinite && $0 > now } ?? false }),
+              let reset = blocked.compactMap({ $0.window.resetsAt }).max() else {
+            return ControlState(mode: "unknown", text: "—", headline: "额度受限", detail: "恢复时间未知，请重新检测", quotas: rows)
+        }
+        return ControlState(mode: "waiting", text: recoveryCountdown(reset, now: now), headline: "等待额度恢复", detail: "\(recoveryCountdown(reset, now: now))后重新确认可用；按较晚恢复时间计算", quotas: rows)
+    }
+    if snapshot.restricted { return ControlState(mode: "restricted", text: "受限", headline: "账号使用受限", detail: "服务端未允许使用，不能仅凭百分比判断可用", quotas: rows) }
+    let selected = rows.first { $0.weekly == weeklySelected } ?? rows.first!
+    let number = selected.window.remaining!
+    let text = number > 0 && number < 1 ? "<1%" : "\(Int(number.rounded()))%"
+    let age = max(0, now - snapshot.fetchedAt)
+    let updated = age < 60 ? "刚刚更新" : "\(Int(age / 60))分钟前"
+    return ControlState(mode: "ready", text: text, headline: updated, detail: "\(selected.title)剩余\(text)", quotas: rows)
+}
+
 @MainActor
-final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
+func controlIcon() -> NSImage {
+    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+        NSColor.black.setStroke()
+        if controlProduct == "Claude" {
+            for index in 0..<12 {
+                let angle = CGFloat(index) * .pi / 6
+                let path = NSBezierPath(); path.lineWidth = 1.5; path.lineCapStyle = .round
+                let inner: CGFloat = index % 2 == 0 ? 3.6 : 5
+                path.move(to: NSPoint(x: 9 + cos(angle) * inner, y: 9 + sin(angle) * inner))
+                path.line(to: NSPoint(x: 9 + cos(angle) * 8, y: 9 + sin(angle) * 8)); path.stroke()
+            }
+        } else {
+            for index in 0..<4 {
+                let path = NSBezierPath(roundedRect: NSRect(x: 5.5, y: 1.5, width: 7, height: 10), xRadius: 3, yRadius: 3)
+                let transform = AffineTransform(translationByX: 9, byY: 9)
+                var rotate = transform; rotate.rotate(byDegrees: CGFloat(index) * 90 + 45); rotate.translate(x: -9, y: -9)
+                path.transform(using: rotate); path.lineWidth = 1.4; path.stroke()
+            }
+        }
+        return true
+    }
+    image.isTemplate = true
+    return image
+}
+
+@MainActor
+struct ControlPanelView: View {
+    @ObservedObject var owner: Overlay
+    var state: ControlState { owner.currentControlState() }
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 13) {
+                    HStack(spacing: 9) {
+                        Image(nsImage: controlIcon()).resizable().frame(width: 20, height: 20)
+                        Text("Easy \(controlProduct)").font(.system(size: 16, weight: .semibold))
+                        Spacer(minLength: 2)
+                        Circle().fill(state.mode == "ready" ? Color.green : Color.orange).frame(width: 6, height: 6)
+                        Text(state.headline).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                        iconButton("刷新额度", "arrow.clockwise") { owner.refresh() }
+                            .disabled(owner.query != nil)
+                    }
+                    Divider()
+                    if state.login {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label(state.mode == "auth_expired" ? "登录已过期，请重新登录" : "尚未登录 \(controlLoginName)", systemImage: "lock")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("登录后即可查看剩余额度").font(.system(size: 12)).foregroundStyle(.secondary)
+                            Text(controlLoginCommand).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                                .padding(8).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+                            HStack {
+                                Button("复制登录命令") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(controlLoginCommand, forType: .string) }
+                                Button("重新检测") { owner.refresh() }.disabled(owner.query != nil)
+                            }.controlSize(.small)
+                        }.padding(.vertical, 4)
+                    } else {
+                        if !["ready", "waiting"].contains(state.mode) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(state.headline).font(.system(size: 13, weight: .medium))
+                                Text(state.detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                Button("重新检测") { owner.refresh() }.controlSize(.small).disabled(owner.query != nil)
+                            }
+                        }
+                        ForEach(state.quotas) { row in quota(row) }
+                        if state.mode == "waiting" {
+                            Text(state.detail).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Divider()
+                    HStack(spacing: 7) {
+                        Image(systemName: "clock").foregroundStyle(.secondary)
+                        Text(clockText(at: Date(), zone: owner.clock.zone)).font(.system(size: 18, weight: .medium)).minimumScaleFactor(0.65).lineLimit(1)
+                            .foregroundColor(Color(nsColor: clockState(at: Date(), zone: owner.clock.zone).color))
+                        Spacer(minLength: 4)
+                        Text(owner.clock.cityName).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    }.accessibilityElement(children: .combine)
+                    Divider()
+                    HStack(alignment: .center, spacing: 9) {
+                        Image(systemName: "network").foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("网络出口").font(.system(size: 12, weight: .medium))
+                            Text(owner.ipText).font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                        Spacer(minLength: 3)
+                        iconButton("刷新公网IP", "arrow.clockwise") { owner.refreshIP() }.disabled(owner.ipQuery != nil)
+                    }
+                    if owner.controlsExpanded { settings }
+                }.padding(16)
+            }.scrollIndicators(.hidden)
+            Divider()
+            HStack {
+                Button { owner.controlsExpanded.toggle(); owner.resizeControls() } label: {
+                    Label(owner.controlsExpanded ? "收起设置" : "更多设置", systemImage: "gearshape")
+                }
+                .buttonStyle(.plain).accessibilityIdentifier("moreSettings")
+                Spacer()
+                Divider().frame(height: 17)
+                Button { owner.quit() } label: { Label("退出", systemImage: "power") }.buttonStyle(.plain)
+            }.font(.system(size: 12)).padding(.horizontal, 16).padding(.vertical, 12)
+        }
+        .frame(width: 360, height: owner.controlHeight)
+        .background(Color(red: 0.09, green: 0.11, blue: 0.13))
+        .preferredColorScheme(.dark)
+    }
+    func iconButton(_ label: String, _ image: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: image).frame(width: 20, height: 20) }
+            .buttonStyle(.plain).help(label).accessibilityLabel(label)
+    }
+    func quota(_ row: ControlQuota) -> some View {
+        let valid = state.mode == "ready" || state.mode == "waiting"
+        let value = valid ? row.window.remaining : nil
+        return Button {
+            let item = NSMenuItem(); item.representedObject = controlProduct == "Codex" ? (row.weekly ? "weekly" : "fiveHour") : row.window.id
+            owner.selectPercentage(item)
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Text(row.title).font(.system(size: 12, weight: .medium)).frame(width: 48, alignment: .leading)
+                VStack(alignment: .leading, spacing: 5) {
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.12))
+                            Capsule().fill(Color(nsColor: RingState.resolve(value, stale: !valid).color))
+                                .frame(width: geometry.size.width * (value ?? 0) / 100)
+                        }
+                    }.frame(height: 5).accessibilityLabel("剩余额度进度")
+                    Text(valid ? resetDescription(row.window.resetsAt, weekly: row.weekly) : "等待有效额度数据")
+                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
+                }
+                HStack(spacing: 3) {
+                    Text("剩余").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(value.map { $0 > 0 && $0 < 1 ? "<1%" : "\(Int($0.rounded()))%" } ?? "—")
+                        .font(.system(size: 14, weight: .semibold)).foregroundColor(Color(nsColor: RingState.resolve(value, stale: !valid).color))
+                }.frame(minWidth: 62, alignment: .trailing)
+            }.padding(.vertical, 3).contentShape(Rectangle())
+        }.buttonStyle(.plain).help("点击选择圆环及状态栏的中心额度")
+    }
+    func setting(_ label: String, value: Bool, action: @escaping () -> Void) -> some View {
+        HStack {
+            Text(label).font(.system(size: 12))
+            Spacer()
+            Toggle(label, isOn: Binding(get: { value }, set: { _ in action(); owner.resizeControls() }))
+                .labelsHidden().toggleStyle(.switch).tint(.green).controlSize(.mini).accessibilityIdentifier(label)
+        }
+    }
+    var settings: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Divider()
+            Text("浮窗与时间").font(.system(size: 10)).foregroundStyle(.secondary)
+            setting("显示时间", value: owner.clockEnabled) { owner.toggleClock() }
+            setting("跟随IP时区", value: owner.followIPTimeZone) { owner.toggleFollowIPTimeZone() }
+            if owner.followIPTimeZone && owner.ipClock.zone == nil {
+                Text("IP时区不可用，暂用自定义时间").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            if !owner.followIPTimeZone {
+                HStack {
+                    Text("手动时区").font(.system(size: 12))
+                    Spacer()
+                    Picker("手动时区", selection: Binding(get: { owner.manualClockCity }, set: { name in
+                        let item = NSMenuItem(); item.representedObject = name; owner.selectTimeZone(item)
+                    })) {
+                        ForEach(ClockCity.presets, id: \.name) { city in Text(city.name).tag(city.name) }
+                        if !ClockCity.presets.contains(where: { $0.name == owner.manualClockCity }) { Text(owner.manualClockCity).tag(owner.manualClockCity) }
+                    }.labelsHidden().frame(width: 155)
+                }
+                HStack {
+                    Text(owner.manualClockZone.identifier).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    Button("自定义…") { owner.customTimeZone(); owner.resizeControls() }.buttonStyle(.link).font(.system(size: 10))
+                }
+            }
+            HStack {
+                Text("浮窗位置").font(.system(size: 12)); Spacer()
+                Button("恢复默认位置") { owner.resetPosition() }.controlSize(.small)
+            }
+            Divider()
+            Text("提醒与启动").font(.system(size: 10)).foregroundStyle(.secondary)
+            setting("额度可用提醒", value: owner.reminder != nil) { owner.toggleReminder() }.disabled(owner.reminderAuthorizing)
+            if let message = owner.reminderError { Text(message).font(.system(size: 10)).foregroundStyle(.orange) }
+            if let reminder = owner.reminder { Text("等待恢复：" + recoveryCountdown(reminder.due, now: Date().timeIntervalSince1970)).font(.system(size: 10)).foregroundStyle(.secondary) }
+            setting("开机启动", value: LoginStartup.enabled()) { owner.toggleLoginStartup() }
+            Divider()
+            Text("版本与更新").font(.system(size: 10)).foregroundStyle(.secondary)
+            setting("自动更新", value: UserDefaults.standard.bool(forKey: "automaticUpdatesEnabled")) { owner.toggleAutomaticUpdates() }
+            HStack {
+                Text("v\(owner.appVersion)").font(.system(size: 11))
+                if owner.updateAvailable { Circle().fill(Color.green).frame(width: 5, height: 5); Text("有新版本").font(.system(size: 10)).foregroundStyle(.secondary) }
+                Spacer()
+                Button(owner.updater == nil ? "检查并更新" : "正在更新…") { owner.updateVersion() }.controlSize(.small).disabled(owner.updater != nil)
+            }
+            if let message = owner.versionCheckError ?? owner.automaticUpdateError { Text(message).font(.system(size: 10)).foregroundStyle(.orange) }
+        }
+    }
+}
+
+@MainActor
+final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate, ObservableObject {
     let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 32, height: 32),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     let ring = RingView(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
@@ -347,6 +607,16 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var ipClockCity: String?
     var manualClockZone = TimeZone(identifier: "America/Los_Angeles")!
     var manualClockCity = "硅谷"
+    @Published var controlRevision = 0
+    let controlPopover = NSPopover()
+    var controlsExpanded = false
+    var controlErrorCode: String?
+    var controlHeight: CGFloat {
+        let state = currentControlState()
+        let quotaHeight: CGFloat = state.login ? 155 : CGFloat(max(1, state.quotas.count)) * 62 + (state.mode == "ready" ? 0 : 65)
+        let total: CGFloat = 205 + quotaHeight + (controlsExpanded ? (followIPTimeZone ? 280 : 345) : 0)
+        return min(total, max(280, (status?.button?.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 900) - 65))
+    }
     var status: NSStatusItem?
     var timer: Timer?
     var ipQuery: Process?
@@ -430,18 +700,58 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         ring.setAccessibilityElement(true)
         ring.setAccessibilityRole(.button)
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        status?.button?.title = "EA"
+        status?.button?.image = controlIcon()
+        status?.button?.imagePosition = .imageLeft
+        status?.button?.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        status?.button?.target = self
+        status?.button?.action = #selector(openControls)
+        status?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         status?.button?.toolTip = "Easy Claude 额度浮窗"
-        let menu = NSMenu(); menu.delegate = self; status?.menu = menu
+        controlPopover.appearance = NSAppearance(named: .darkAqua)
+        controlPopover.behavior = .transient
+        controlPopover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        controlPopover.contentViewController = NSHostingController(rootView: ControlPanelView(owner: self))
         timer = Timer.scheduledTimer(timeInterval: 0.4, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(hide), name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
         tick()
+    }
+    func currentControlState(now: Double = Date().timeIntervalSince1970) -> ControlState {
+        controlState(snapshot: snapshot, error: error, code: controlErrorCode, weeklySelected: ring.showWeeklyPercentage, now: now)
+    }
+    func refreshControls() {
+        let state = currentControlState()
+        let title = " " + state.text
+        if status?.button?.title != title { status?.button?.title = title }
+        let tip = "Easy \(controlProduct) · \(state.detail)"
+        if status?.button?.toolTip != tip { status?.button?.toolTip = tip }
+        status?.button?.setAccessibilityLabel("Easy \(controlProduct) \(state.headline) \(state.text)")
+        if controlPopover.isShown { resizeControls() }
+    }
+    func resizeControls() {
+        controlRevision += 1
+        let size = NSSize(width: 360, height: controlHeight)
+        if controlPopover.contentSize != size { controlPopover.contentSize = size }
+    }
+    @objc func openControls() {
+        guard let button = status?.button else { return }
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            let menu = makeMenu(); status?.menu = menu; button.performClick(nil); status?.menu = nil
+            return
+        }
+        if controlPopover.isShown { controlPopover.performClose(nil); return }
+        controlsExpanded = false
+        resizeControls()
+        NSApp.activate(ignoringOtherApps: true)
+        controlPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
     @objc func hide() { panel.orderOut(nil); clockPanel.orderOut(nil) }
     @objc func tick() {
         checkVersionIfNeeded()
         if Date().timeIntervalSince(ipLastAttempt) >= 300 { refreshIP() }
         if let reminder, Date().timeIntervalSince(lastAttempt) >= (Date().timeIntervalSince1970 >= reminder.due ? 60 : 300) { refresh() }
+        let resetDue = snapshot?.windows.contains { $0.resetsAt.map { $0 <= Date().timeIntervalSince1970 } ?? false } ?? false
+        if Date().timeIntervalSince(lastAttempt) >= 300 || (resetDue && Date().timeIntervalSince(lastAttempt) >= 60) { refresh() }
+        refreshControls()
         guard let rect = targetWindow() else { hide(); lastRect = nil; return }
         lastRect = rect
         if clockEnabled {
@@ -504,18 +814,19 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 self.query = nil
                 do {
                     let value = try JSONDecoder().decode(Snapshot.self, from: data)
-                    if let message = value.error { self.error = message }
+                    if let message = value.error { self.error = message; self.controlErrorCode = value.errorCode }
                     else if process.terminationStatus == 0, value.fetchedAt > 0 {
-                        self.snapshot = value; self.error = nil
-                    } else { self.error = "额度查询失败" }
-                } catch { self.error = "无法读取额度响应，请检查 CLI 和网络" }
+                        self.snapshot = value; self.error = nil; self.controlErrorCode = nil
+                    } else { self.error = "额度查询失败"; self.controlErrorCode = nil }
+                } catch { self.error = "无法读取额度响应，请检查 CLI 和网络"; self.controlErrorCode = nil }
                 self.checkReminder()
                 self.updateRing()
+                self.refreshControls()
             }
         }
         query = process
         do { try process.run() }
-        catch { query = nil; self.error = "无法启动额度查询，请重新运行 easy-claude show"; updateRing() }
+        catch { query = nil; self.controlErrorCode = nil; self.error = "无法启动额度查询，请重新运行 easy-claude show"; updateRing() }
     }
     func applyClockTimeZone() {
         clock.zone = ipClock.resolved(manual: manualClockZone, following: followIPTimeZone)
@@ -910,6 +1221,59 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
 }
 
+@MainActor
+func runControlChecks() {
+    let now = 1_800_000_000.0
+    func sample(_ five: Double? = 94, _ week: Double? = 77, fiveReset: Double? = nil, weekReset: Double? = nil, age: Double = 0, restricted: Bool = false) -> Snapshot {
+        func row(_ weekly: Bool, _ remaining: Double?, _ reset: Double?) -> [String: Any] {
+            ["id": controlProduct == "Codex" ? "codex:" + (weekly ? "secondary" : "primary") : (weekly ? "seven_day:primary" : "five_hour:primary"),
+             "label": weekly ? "周" : "5小时", "name": "test", "remaining": remaining as Any? ?? NSNull(),
+             "windowDurationMins": weekly ? 10080 : 300, "resetsAt": reset as Any? ?? NSNull()]
+        }
+        let data: [String: Any] = ["windows": [row(false, five, fiveReset), row(true, week, weekReset)], "fetchedAt": now - age, "restricted": restricted]
+        return try! JSONDecoder().decode(Snapshot.self, from: JSONSerialization.data(withJSONObject: data))
+    }
+    func state(_ snapshot: Snapshot?, error: String? = nil, code: String? = nil, weekly: Bool = false) -> ControlState {
+        controlState(snapshot: snapshot, error: error, code: code, weeklySelected: weekly, now: now)
+    }
+    precondition(state(nil).mode == "loading")
+    precondition(state(sample()).text == "94%")
+    precondition(state(sample(), weekly: true).text == "77%")
+    var onlyWeek = sample(); onlyWeek.windows = controlQuotas(onlyWeek.windows).filter { $0.weekly }.map { $0.window }
+    precondition(state(onlyWeek).text == "77%")
+    var onlyFive = sample(); onlyFive.windows = controlQuotas(onlyFive.windows).filter { !$0.weekly }.map { $0.window }
+    precondition(state(onlyFive,weekly:true).text == "94%")
+    precondition(state(sample(),code:"auth_required").mode == "ready")
+    precondition(state(sample(0.1)).text == "<1%")
+    precondition(state(sample(0, 0, fiveReset: now + 3600, weekReset: now + 7200)).text == "2小时")
+    precondition(state(sample(0, 0, fiveReset: now + 10800, weekReset: now + 7200)).text == "3小时")
+    precondition(state(sample(94, 0, weekReset: now + 3 * 86400)).mode == "waiting")
+    precondition(state(sample(0, 77)).mode == "unknown")
+    precondition(state(sample(0, 77, fiveReset: now - 1)).mode == "verifying")
+    precondition(state(sample(nil, 77)).mode == "unknown")
+    precondition(state(sample(94,77,weekReset:1e100)).mode == "unknown")
+    precondition(state(sample(age: controlStaleSeconds + 1)).mode == "unknown")
+    precondition(state(sample(age: -60)).mode == "unknown")
+    precondition(state(sample(restricted: true)).mode == "restricted")
+    for (code, mode) in [("auth_required", "auth_required"), ("auth_expired", "auth_expired"), ("query_failed", "failed")] {
+        let result = state(sample(), error: "test", code: code)
+        precondition(result.mode == mode && result.quotas.isEmpty && !result.text.contains("%"))
+    }
+    precondition(state(sample(), error: "网络失败，请检查登录").mode == "failed")
+    precondition(recoveryCountdown(now + 3 * 86400 + 100, now: now) == "3天")
+    precondition(recoveryCountdown(now + 3 * 3600 + 120, now: now) == "3小时2分")
+    precondition(recoveryCountdown(now + 22 * 60, now: now) == "22分")
+    precondition(recoveryCountdown(now, now: now) == "确认中")
+    precondition(recoveryCountdown(.infinity, now: now) == "未知")
+    let icon = controlIcon()
+    precondition(icon.isTemplate && icon.size == NSSize(width: 18, height: 18) && icon.tiffRepresentation != nil)
+    let owner = Overlay()
+    let before = owner.controlHeight
+    owner.controlsExpanded = true
+    precondition(owner.controlHeight >= before)
+    print("操作面板：正常/耗尽/较晚恢复/认证/失败/未知、模板图标及展开高度检查通过")
+}
+
 @main
 struct Main {
     @MainActor static func main() {
@@ -942,6 +1306,7 @@ struct Main {
             precondition(ipClockTest.update("Asia/Singapore"))
             precondition(ipClockTest.resolved(manual: manualIPTest, following: true).identifier == "Asia/Singapore")
             _ = NSApplication.shared
+            runControlChecks()
             let periodZone = TimeZone(secondsFromGMT: 0)!
             for (minutes, expected) in [(0,"凌晨"),(359,"凌晨"),(360,"上午"),(719,"上午"),(720,"下午"),(1079,"下午"),(1080,"晚上"),(1259,"晚上"),(1260,"深夜"),(1439,"深夜")] {
                 let date = Date(timeIntervalSince1970: Double(minutes * 60))

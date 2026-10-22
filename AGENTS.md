@@ -65,3 +65,11 @@
 
 - 当前时间clockText在12小时制显示中文五时段：00–06凌晨、06–12上午、12–18下午、18–21晚上、21–24深夜；按所选时区计算，零点00:mm、正午12:mm。Codex上行小字复用clockPeriod，24小时制及额度重置时间系统格式保持。
 - 开机启动菜单默认关闭，以用户Library/LaunchAgents/com.unionschool.easy-claude.login.plist存在为状态；仅手动开启才写入，RunAtLoad且无KeepAlive，登录后通过当前Node和自身CLI的show启动。关闭只删除自身文件，不退出当前浮窗，不修改官方应用或使用sudo。仅保存PATH（Codex另保留非空CODEX_HOME），不保存认证或代理凭据。更新原前缀保持路径，迁移Node/npm需用户重开关以更新路径。
+
+## 1.0 控制面板
+
+- 左键状态栏打开AppKit NSPopover＋SwiftUI面板；每次默认收起，仅显示额度/时间、网络、更多设置及退出，展开设置可滚动，右键保留makeMenu兼容入口。原UserDefaults键、通知授权、更新锁、登录启动逻辑复用，不自动更改用户开关。
+- ControlState统一状态栏与面板：有效额度显示所选窗口百分比；任一已知总窗口耗尽取耗尽窗口较晚重置；到期确认中；缺失/过期/错误不显示旧数字。始终后台按原查询周期刷新，只有到期确认可缩短为60秒，查询不重叠。
+- Snapshot新增可选errorCode，仅接受auth_required/auth_expired；普通错误为query_failed。Codex先account/read确认空账号后才判未登录，明确协议认证过期码才判过期；Claude缺凭据/过期/401明确分类，403不得当作未登录。复制命令不自动运行，不读取或转发额外认证数据。
+- npm run test:controls在隔离测试Bundle偏好域内编译实际ControlPanelView并绘制八类状态，生成native/build/control-previews（不进入npm包）；覆盖已有设置动作及实际按钮操作。CI与发布工作流必须执行；测试失败不得跳过或削弱。
+- 本版管理文件docs/版本/1.0.1开发管理.md持续区分本机完成、已发布和待验收；默认只交付Markdown。
