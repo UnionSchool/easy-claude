@@ -102,3 +102,5 @@ A matching `v<version>` tag triggers GitHub Actions validation, universal build 
 ## Known limits
 
 CLI login can expire while the desktop remains signed in. Official service responses and network access determine availability. Notification sound, real logout/reboot and cross-machine multi-monitor behavior need separate acceptance; simulated UI tests do not prove those paths.
+
+[Version management](https://github.com/UnionSchool/easy-claude/blob/main/docs/版本/README.md)

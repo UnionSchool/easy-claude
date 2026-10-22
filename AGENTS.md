@@ -91,3 +91,5 @@
 - npm run test:focus会打开隔离测试输入窗口并自动输入12秒，另起后台进程运行真实Overlay源码；只替换目标窗口依赖与查询响应，虚拟推进查询到期时刻。验证前台PID/keyWindow/firstResponder/输入内容/光标及中文markedText，结束清理随机Bundle域；不读用户编辑器、不调用模型。需明确测试授权且避免用户正在输入时运行，不放入普通CI或npm包。
 
 - 后台额度/IP刷新与重绘不得调用activate、makeKey、runModal或更换用户keyWindow/firstResponder；需要激活的操作只能由用户明确点击触发。test:polling检查正常300秒/到期60秒边界及快照过期；焦点测试的模拟输入范围不能说成全输入法验收。
+
+- 版本索引与发布步骤见docs/版本/README.md；package.json为唯一版本源，原生产物Info.plist由构建生成。源码、构建、npm公开安装及本机版本分开记录；发布后不移动标签，纯文档提交不改变包版本。
