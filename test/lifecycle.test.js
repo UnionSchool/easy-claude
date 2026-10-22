@@ -1,3 +1,4 @@
+process.env.EASY_LANGUAGE = 'zh';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { updatePackage, installedPrefix, isNewer } from '../src/update.js';

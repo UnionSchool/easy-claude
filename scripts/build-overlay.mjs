@@ -27,6 +27,7 @@ await writeFile(`${app}/Info.plist`, `<?xml version="1.0" encoding="UTF-8"?>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>${version}</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>`);

@@ -1,3 +1,4 @@
+import { L } from './language.js';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -10,15 +11,15 @@ export function systemProxy(text) {
   const host = value('HTTPSProxy');
   const port = Number(value('HTTPSPort'));
   if (!host || !/^[a-zA-Z0-9.:-]+$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error('系统 HTTPS 代理配置无效。');
+    throw new Error(L('系统 HTTPS 代理配置无效。', 'Invalid system HTTPS proxy configuration.'));
   }
   return `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
 }
 
 export function curlConfig(url, headers, proxy) {
-  if (url !== endpoint) throw new Error('仅允许官方额度地址。');
+  if (url !== endpoint) throw new Error(L('仅允许官方额度地址。', 'Only the official usage endpoint is allowed.'));
   const quote = value => {
-    if (/[\r\n\0]/.test(value)) throw new Error('请求配置包含无效字符。');
+    if (/[\r\n\0]/.test(value)) throw new Error(L('请求配置包含无效字符。', 'Request configuration contains invalid characters.'));
     return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
   };
   return [`url = ${quote(url)}`, `proxy = ${quote(proxy)}`,
@@ -40,19 +41,19 @@ export async function quotaFetch(url, options) {
     let size = 0;
     child.stdout.on('data', data => {
       size += data.length;
-      if (size > 1024 * 1024) { child.kill(); reject(new Error('额度响应过大。')); }
+      if (size > 1024 * 1024) { child.kill(); reject(new Error(L('额度响应过大。', 'Usage response too large.'))); }
       else chunks.push(data);
     });
-    child.on('error', () => reject(new Error('额度代理请求失败。')));
+    child.on('error', () => reject(new Error(L('额度代理请求失败。', 'Usage proxy request failed.'))));
     child.stdin.on('error', () => {});
     child.on('close', code => {
-      if (code !== 0) { reject(new Error('额度代理请求失败。')); return; }
+      if (code !== 0) { reject(new Error(L('额度代理请求失败。', 'Usage proxy request failed.'))); return; }
       const output = Buffer.concat(chunks).toString('utf8');
       const split = output.lastIndexOf('\n');
       const status = Number(output.slice(split + 1));
       if (status < 200 || status >= 300) {
         if (status >= 400 && status <= 599) resolve(new Response(null, { status }));
-        else reject(new Error('额度请求收到无效响应或重定向。'));
+        else reject(new Error(L('额度请求收到无效响应或重定向。', 'Invalid usage response or redirect.')));
         return;
       }
       resolve(new Response(output.slice(0, split), { status }));

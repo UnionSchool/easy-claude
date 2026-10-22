@@ -1,3 +1,4 @@
+process.env.EASY_LANGUAGE = 'zh';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { credentialToken, normalizeUsage, readUsage, formatUsage } from '../src/usage.js';
@@ -43,7 +44,15 @@ test('区分登录失效和服务拒绝，403 不误导为重新登录', async (
 test('认证状态明确分类，403和网络错误不能冒充未登录', async () => {
   assert.throws(() => credentialToken('{}'), e => e.code === 'auth_required');
   assert.throws(() => credentialToken(JSON.stringify({claudeAiOauth:{accessToken:'test-only',expiresAt:1}}),100), e => e.code === 'auth_expired');
-  for (const [status, expected] of [[401,'auth_expired'],[403,undefined],[429,undefined],[500,undefined]]) {
+  for (const [status, expected] of [[401,'auth_expired'],[403,undefined],[429,'rate_limited'],[500,undefined]]) {
     await assert.rejects(readUsage({getToken:async()=>'test-only',fetchImpl:async()=>new Response('',{status})}), e => e.code === expected);
   }
+});
+
+test('429保留结构化限流状态，不读取错误正文或立即重试', async () => {
+  let calls = 0;
+  await assert.rejects(readUsage({ getToken: async () => 'fake', fetchImpl: async () => {
+    calls++; return { status:429, ok:false, json: () => { throw new Error('must not read body'); } };
+  } }), error => error.code === 'rate_limited');
+  assert.equal(calls, 1);
 });

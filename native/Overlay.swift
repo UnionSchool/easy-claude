@@ -4,6 +4,160 @@ import CoreGraphics
 import Darwin
 import UserNotifications
 
+// 语言与地区/小时制独立：只保存用户选择，不改系统设置。
+enum AppLanguage: String, CaseIterable {
+    case system, zh, en
+    static func resolve(_ choice: String?, preferred: [String]) -> AppLanguage {
+        if choice == "zh" { return .zh }
+        if choice == "en" { return .en }
+        return preferred.first?.lowercased().hasPrefix("zh") == true ? .zh : .en
+    }
+    static var current: AppLanguage {
+        resolve(UserDefaults.standard.string(forKey: "interfaceLanguage"), preferred: Locale.preferredLanguages)
+    }
+}
+func L(_ chinese: String, _ english: String) -> String { AppLanguage.current == .zh ? chinese : english }
+func cityLabel(_ value: String) -> String {
+    let names = ["硅谷": "Silicon Valley", "洛杉矶": "Los Angeles", "西雅图": "Seattle", "华盛顿": "Washington, D.C.", "哥伦布": "Columbus, Ohio", "新加坡": "Singapore", "上海": "Shanghai"]
+    return AppLanguage.current == .zh ? value : names[value] ?? value
+}
+
+func displayMessage(_ text: String) -> String {
+    let messages: [String: String] = [
+        "等待额度": "Waiting for usage",
+        "重置时间未知": "Reset time unknown",
+        "已到重置时间，等待更新": "Reset due; checking",
+        "IP异常": "IP unavailable",
+        "城市未知": "Unknown city",
+        "启动路径无效，请从正式安装的命令重新打开浮窗": "Invalid startup path. Reopen using the installed command.",
+        "周额度": "Weekly",
+        "5小时": "5-hour",
+        "未知": "Unknown",
+        "确认中": "Checking",
+        "未登录": "Not signed in",
+        "登录已过期": "Login expired",
+        "查询失败": "Query failed",
+        "正在读取": "Loading",
+        "正在查询本机CLI账号额度": "Reading local CLI account usage",
+        "额度未知": "Usage unknown",
+        "等待有效的额度数据，请重新检测": "Waiting for valid usage data. Check again.",
+        "正在确认恢复": "Checking availability",
+        "重置时刻已到，需服务端确认后再显示可用": "Reset time reached. Waiting for server confirmation.",
+        "额度受限": "Usage limited",
+        "恢复时间未知，请重新检测": "Reset time unknown. Check again.",
+        "等待额度恢复": "Waiting for reset",
+        "受限": "Limited",
+        "账号使用受限": "Account restricted",
+        "服务端未允许使用，不能仅凭百分比判断可用": "The server has restricted usage regardless of remaining percentage.",
+        "刚刚更新": "Just updated",
+        "刷新额度": "Refresh usage",
+        "登录已过期，请重新登录": "Login expired. Sign in again.",
+        "登录后即可查看剩余额度": "Sign in to view remaining usage",
+        "复制登录命令": "Copy login command",
+        "重新检测": "Check again",
+        "网络出口": "Network exit",
+        "刷新公网IP": "Refresh public IP",
+        "收起设置": "Less settings",
+        "更多设置": "More settings",
+        "退出": "Quit",
+        "剩余额度进度": "Remaining usage",
+        "等待有效额度数据": "Waiting for usage data",
+        "剩余": "Left",
+        "点击选择圆环及状态栏的中心额度": "Select the usage shown in the ring and menu bar",
+        "浮窗与时间": "Overlay & time",
+        "显示时间": "Show time",
+        "跟随IP时区": "Follow IP time zone",
+        "IP时区不可用，暂用自定义时间": "IP time zone unavailable; using manual time",
+        "手动时区": "Manual time zone",
+        "自定义…": "Custom…",
+        "浮窗位置": "Overlay position",
+        "恢复默认位置": "Reset position",
+        "提醒与启动": "Reminder & startup",
+        "额度可用提醒": "Usage available alert",
+        "等待恢复：": "Waiting: ",
+        "开机启动": "Launch at login",
+        "版本与更新": "Version & updates",
+        "自动更新": "Automatic updates",
+        "有新版本": "Update available",
+        "检查并更新": "Check for updates",
+        "正在更新…": "Updating…",
+        "正在获取IP…": "Fetching IP…",
+        "Easy Codex 额度浮窗": "Easy Codex overlay",
+        "Easy Claude 额度浮窗": "Easy Claude overlay",
+        "单环": "Ring",
+        "内侧细环": "Inner ring",
+        "（未知或已过期）": " (unknown or stale)",
+        "尚未更新": "Not updated yet",
+        "额度查询失败": "Usage query failed",
+        "无法读取额度响应，请检查 CLI 和网络": "Cannot read usage. Check the CLI and network.",
+        "无法启动额度查询，请重新运行 easy-codex show": "Cannot start query. Run easy-codex show again.",
+        "无法启动额度查询，请重新运行 easy-claude show": "Cannot start query. Run easy-claude show again.",
+        "当前额度可用，或缺少有效额度/重置时间；请刷新后重试": "Usage is available, or usage/reset data is missing. Refresh and try again.",
+        "请在系统设置中允许本工具发送通知，再开启提醒": "Allow notifications in System Settings before enabling this alert.",
+        "通知未获允许，提醒已保留；请在系统设置允许通知": "Notifications are blocked. Alert kept; allow notifications in System Settings.",
+        "Codex 额度已恢复": "Codex usage available",
+        "Claude 额度已恢复": "Claude usage available",
+        "已确认当前额度可用，可以继续使用了。": "Usage is confirmed available. You can continue.",
+        "通知发送失败，提醒已保留，将稍后重试": "Notification failed. Alert kept; will retry.",
+        "Easy Codex · CLI 账号额度": "Easy Codex · CLI account usage",
+        "Easy Claude · CLI 账号额度": "Easy Claude · CLI account usage",
+        "等待 Codex 前台窗口": "Waiting for Codex foreground window",
+        "等待 Claude 前台窗口": "Waiting for Claude foreground window",
+        "拖动圆环可调整位置": "Drag the ring to reposition",
+        "服务端提示：当前使用受限": "Server reports restricted usage",
+        "点击刷新公网IP；城市为网络出口位置": "Click to refresh public IP; city is the network exit location",
+        "周": "Weekly",
+        "立即刷新": "Refresh now",
+        "正在刷新…": "Refreshing…",
+        "等待额度恢复 · ": "Waiting for reset · ",
+        "IP时区不可用，显示自定义时间": "IP time zone unavailable; using manual time",
+        "自定义时区…": "Custom time zone…",
+        "有新版本可更新": "A new version is available",
+        "登录当前macOS用户后自动打开浮窗": "Open overlay when this macOS user signs in",
+        "退出浮窗": "Quit overlay",
+        "无法设置开机启动": "Cannot change launch at login",
+        "设置电子时钟时区": "Set clock time zone",
+        "输入 IANA 时区，例如 America/Los_Angeles；自动适应夏令时。": "Enter an IANA time zone, e.g. America/Los_Angeles. Daylight saving is automatic.",
+        "保存": "Save",
+        "取消": "Cancel",
+        "无效时区，请输入有效的 IANA 名称，例如 America/Los_Angeles。": "Invalid time zone. Enter an IANA name, e.g. America/Los_Angeles.",
+        "版本检查失败，保留上次结果": "Update check failed; keeping the last result",
+        "自动更新失败：无法创建更新日志": "Automatic update failed: cannot create log",
+        "无法创建更新日志，请检查临时目录权限。": "Cannot create update log. Check temporary directory permissions.",
+        "自动更新失败：无法清理临时日志": "Automatic update failed: cannot remove temporary log",
+        "无法清理临时更新日志，请检查临时目录权限。": "Cannot remove update log. Check temporary directory permissions.",
+        "自动更新失败，请点击更新版本查看原因": "Automatic update failed. Check for updates to view details.",
+        "更新失败，请检查网络或安装目录权限。\\n": "Update failed. Check network and installation permissions.\\n",
+        "自动更新失败：无法启动更新": "Automatic update failed: cannot start updater",
+        "无法启动更新，请重新运行 easy-codex show。": "Cannot start updater. Run easy-codex show again.",
+        "无法启动更新，请重新运行 easy-claude show。": "Cannot start updater. Run easy-claude show again.",
+        "更新版本": "Check for updates",
+        "好": "OK",
+    ]
+    if AppLanguage.current == .zh {
+        return messages.first(where: { $0.value == text })?.key ?? text
+    }
+    if let translated = messages[text] { return translated }
+    if text.contains("·"), text.hasPrefix("城市未知") { return text.replacingOccurrences(of: "城市未知", with: "Unknown city") }
+    return text
+}
+
+// 所有额度查询入口共用退避，手动刷新及提醒不能绕过429冷却。
+struct UsageRefreshSchedule {
+    var rateLimitCount = 0
+    var nextAllowedAt: Double = 0
+    func allows(_ now: Double) -> Bool { now >= nextAllowedAt }
+    mutating func receive(rateLimited: Bool, succeeded: Bool, now: Double) {
+        if rateLimited {
+            rateLimitCount = min(rateLimitCount + 1, 4)
+            nextAllowedAt = now + min(900, 120 * pow(2, Double(rateLimitCount - 1)))
+        } else if succeeded {
+            rateLimitCount = 0
+            nextAllowedAt = 0
+        }
+    }
+}
+
 struct UsageWindow: Decodable {
     let id: String
     let label: String
@@ -82,7 +236,7 @@ class RingView: NSView {
     var showFiveHourRing = true
     var displaysWeeklyPercentage: Bool { showWeeklyRing && (showWeeklyPercentage || !showFiveHourRing) }
     var stale = true
-    var caption = "等待额度"
+    var caption = L("等待额度", "Waiting for usage")
     var makeMenu: (() -> NSMenu)?
     var moved: ((CGPoint) -> Void)?
     var refresh: (() -> Void)?
@@ -165,48 +319,48 @@ func versionCheckDue(lastAttempt: Double, checkedVersion: String?, currentVersio
 
 func resetDescription(_ resetsAt: Double?, weekly: Bool, now: Date = Date(), zone: TimeZone = .current,
                       locale: Locale = .autoupdatingCurrent) -> String {
-    guard let resetsAt, resetsAt.isFinite, abs(resetsAt) < 8.64e12 else { return "重置时间未知" }
+    guard let resetsAt, resetsAt.isFinite, abs(resetsAt) < 8.64e12 else { return L("重置时间未知", "Reset time unknown") }
     let remaining = resetsAt - now.timeIntervalSince1970
-    guard remaining > 0 else { return "已到重置时间，等待更新" }
+    guard remaining > 0 else { return L("已到重置时间，等待更新", "Reset due; checking") }
     let formatter = DateFormatter()
-    formatter.locale = locale
+    formatter.locale = AppLanguage.current == .en ? Locale(identifier: "en_US") : locale
     formatter.timeZone = zone
-    formatter.setLocalizedDateFormatFromTemplate("jm")
+    formatter.setLocalizedDateFormatFromTemplate((locale.hourCycle == .oneToTwelve || locale.hourCycle == .zeroToEleven) ? "hm" : "Hm")
     let date = Date(timeIntervalSince1970: resetsAt)
     let clock = formatter.string(from: date)
-    formatter.dateFormat = "d'日'"
+    formatter.dateFormat = L("d'日'", "MMM d")
     let time = weekly ? "\(formatter.string(from: date)) \(clock)" : clock
     let duration: String
     if weekly {
-        if remaining >= 86400 { duration = "\(Int(remaining / 86400))天" }
-        else if remaining >= 3600 { duration = "\(Int(remaining / 3600))小时" }
-        else { duration = "\(Int(ceil(remaining / 60)))分钟" }
+        if remaining >= 86400 { duration = L("\(Int(remaining / 86400))天", "\(Int(remaining / 86400))d") }
+        else if remaining >= 3600 { duration = L("\(Int(remaining / 3600))小时", "\(Int(remaining / 3600))h") }
+        else { duration = L("\(Int(ceil(remaining / 60)))分钟", "\(Int(ceil(remaining / 60)))m") }
     } else {
         let totalMinutes = Int(ceil(remaining / 60))
         let hours = totalMinutes / 60
         let minutes = totalMinutes % 60
-        duration = (hours > 0 ? "\(hours)小时" : "") + (minutes > 0 ? "\(minutes)分" : "")
+        duration = (hours > 0 ? L("\(hours)小时", "\(hours)h") : "") + (minutes > 0 ? L("\(minutes)分", "\(minutes)m") : "")
     }
-    return "\(duration)后 \(time) 重置"
+    return L("\(duration)后 \(time) 重置", "Resets in \(duration) · \(time)")
 }
 
 func clockPeriod(at date: Date, zone: TimeZone) -> String {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = zone
     switch calendar.component(.hour, from: date) {
-    case 0..<6: return "凌晨"
-    case 6..<12: return "上午"
-    case 12..<18: return "下午"
-    case 18..<21: return "晚上"
-    default: return "深夜"
+    case 0..<6: return L("凌晨", "AM")
+    case 6..<12: return L("上午", "AM")
+    case 12..<18: return L("下午", "PM")
+    case 18..<21: return L("晚上", "PM")
+    default: return L("深夜", "PM")
     }
 }
 
 func clockText(at date: Date, zone: TimeZone, locale: Locale = .autoupdatingCurrent) -> String {
     let formatter = DateFormatter()
-    formatter.locale = locale
+    formatter.locale = AppLanguage.current == .en ? Locale(identifier: "en_US") : locale
     formatter.timeZone = zone
-    formatter.setLocalizedDateFormatFromTemplate("jm")
+    formatter.setLocalizedDateFormatFromTemplate((locale.hourCycle == .oneToTwelve || locale.hourCycle == .zeroToEleven) ? "hm" : "Hm")
     if locale.hourCycle == .oneToTwelve || locale.hourCycle == .zeroToEleven {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = zone
@@ -215,6 +369,19 @@ func clockText(at date: Date, zone: TimeZone, locale: Locale = .autoupdatingCurr
         return "\(clockPeriod(at: date, zone: zone)) \(formatter.string(from: date))"
     }
     return formatter.string(from: date)
+}
+
+
+func floatingClockLines(at date: Date, zone: TimeZone, locale: Locale = .autoupdatingCurrent) -> (time: String, period: String?) {
+    let twelveHour = locale.hourCycle == .oneToTwelve || locale.hourCycle == .zeroToEleven
+    guard twelveHour else { return (clockText(at: date, zone: zone, locale: locale), nil) }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = zone
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    formatter.dateFormat = calendar.component(.hour, from: date) == 0 ? "HH:mm" : "h:mm"
+    return (formatter.string(from: date), clockPeriod(at: date, zone: zone))
 }
 
 
@@ -244,22 +411,38 @@ func clockState(at date: Date, zone: TimeZone) -> RingState {
 }
 
 @MainActor
+func floatingClockText(at date: Date, zone: TimeZone, width: CGFloat, baseSize: CGFloat,
+                       locale: Locale = .autoupdatingCurrent) -> (text: NSAttributedString, timeWidth: CGFloat) {
+    let parts = floatingClockLines(at: date, zone: zone, locale: locale)
+    var size = baseSize
+    var result = NSAttributedString()
+    var numericWidth: CGFloat = 0
+    for _ in 0..<8 {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .medium)
+        numericWidth = (parts.time as NSString).size(withAttributes: [.font: font]).width
+        let line = NSMutableAttributedString(string: parts.time, attributes: [.font: font, .foregroundColor: clockState(at: date, zone: zone).color])
+        if let period = parts.period {
+            line.append(NSAttributedString(string: " " + period, attributes: [.font: NSFont.systemFont(ofSize: size / 2, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor]))
+        }
+        result = line
+        if result.size().width <= width { break }
+        size *= max(1, width - 1) / result.size().width * 0.98
+    }
+    return (result, numericWidth)
+}
+
+@MainActor
 final class ClockView: RingView {
     var zone = TimeZone(identifier: "America/Los_Angeles")!
     var cityName = "硅谷"
     override func draw(_ dirtyRect: NSRect) {
         let style = NSMutableParagraphStyle()
         style.alignment = .center
-        let now = Date()
-        let time = clockText(at: now, zone: zone)
-        let timeFont = fittedClockFont(for: time, width: bounds.width, baseSize: 20)
-        let timeWidth = (time as NSString).size(withAttributes: [.font: timeFont]).width
-        (time as NSString).draw(in: CGRect(x: 0, y: 17, width: bounds.width, height: 25),
-            withAttributes: [.font: timeFont,
-                             .foregroundColor: clockState(at: now, zone: zone).color, .paragraphStyle: style])
-        let city = cityName
+        let line = floatingClockText(at: Date(), zone: zone, width: bounds.width, baseSize: 20)
+        line.text.draw(at: NSPoint(x: (bounds.width - line.text.size().width) / 2, y: 17))
+        let city = cityLabel(cityName)
         (city as NSString).draw(in: CGRect(x: 0, y: 1, width: bounds.width, height: 15),
-            withAttributes: [.font: fittedClockFont(for: city, width: timeWidth, baseSize: 10),
+            withAttributes: [.font: fittedClockFont(for: city, width: line.timeWidth, baseSize: 10),
                              .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style])
     }
 }
@@ -280,8 +463,8 @@ struct PublicIP: Decodable {
     let timezone: String?
 }
 func publicIPText(ip: String?, city: String?) -> String {
-    guard let ip, !ip.isEmpty else { return "IP异常" }
-    return "\(city ?? "城市未知")·\(ip)"
+    guard let ip, !ip.isEmpty else { return L("IP异常", "IP unavailable") }
+    return "\(city ?? L("城市未知", "Unknown city"))·\(ip)"
 }
 
 // 只等待耗尽窗口，但确认恢复时必须同时检查所有已知窗口，缺失或未知不能报可用。
@@ -325,7 +508,7 @@ enum LoginStartup {
         }
         guard node.hasPrefix("/"), cli.hasPrefix("/"),
               FileManager.default.isExecutableFile(atPath: node), FileManager.default.fileExists(atPath: cli) else {
-            throw NSError(domain: label, code: 1, userInfo: [NSLocalizedDescriptionKey: "启动路径无效，请从正式安装的命令重新打开浮窗"])
+            throw NSError(domain: label, code: 1, userInfo: [NSLocalizedDescriptionKey: L("启动路径无效，请从正式安装的命令重新打开浮窗", "Invalid startup path. Reopen using the installed command.")])
         }
         let config: [String: Any] = ["Label": label, "ProgramArguments": [node, cli, "show"],
                                     "RunAtLoad": true, "EnvironmentVariables": environment]
@@ -345,7 +528,7 @@ struct ControlQuota: Identifiable {
     let window: UsageWindow
     let weekly: Bool
     var id: String { window.id }
-    var title: String { weekly ? "周额度" : "5小时" }
+    var title: String { weekly ? L("周额度", "Weekly") : L("5小时", "5-hour") }
 }
 struct ControlState {
     var mode: String
@@ -357,44 +540,44 @@ struct ControlState {
 }
 func recoveryCountdown(_ reset: Double, now: Double) -> String {
     let seconds = reset - now
-    guard reset.isFinite, now.isFinite, seconds < 8.64e12 else { return "未知" }
-    guard seconds > 0 else { return "确认中" }
-    if seconds >= 86400 { return "\(Int(seconds / 86400))天" }
+    guard reset.isFinite, now.isFinite, seconds < 8.64e12 else { return L("未知", "Unknown") }
+    guard seconds > 0 else { return L("确认中", "Checking") }
+    if seconds >= 86400 { return L("\(Int(seconds / 86400))天", "\(Int(seconds / 86400))d") }
     let minutes = Int(ceil(seconds / 60)), hours = minutes / 60
-    return (hours > 0 ? "\(hours)小时" : "") + (minutes % 60 > 0 ? "\(minutes % 60)分" : "")
+    return (hours > 0 ? L("\(hours)小时", "\(hours)h") : "") + (minutes % 60 > 0 ? L("\(minutes % 60)分", "\(minutes % 60)m") : "")
 }
 func controlState(snapshot: Snapshot?, error: String?, code: String?, weeklySelected: Bool, now: Double) -> ControlState {
     let rows = controlQuotas(snapshot?.windows ?? [])
     if let error {
         let auth = code == "auth_required" || code == "auth_expired"
-        let title = code == "auth_required" ? "未登录" : code == "auth_expired" ? "登录已过期" : "查询失败"
-        return ControlState(mode: auth ? code! : "failed", text: title, headline: title, detail: error, quotas: [])
+        let title = code == "auth_required" ? L("未登录", "Not signed in") : code == "auth_expired" ? L("登录已过期", "Login expired") : L("查询失败", "Query failed")
+        return ControlState(mode: auth ? code! : "failed", text: title, headline: title, detail: displayMessage(error), quotas: [])
     }
-    guard let snapshot else { return ControlState(mode: "loading", text: "—", headline: "正在读取", detail: "正在查询本机CLI账号额度", quotas: []) }
+    guard let snapshot else { return ControlState(mode: "loading", text: "—", headline: L("正在读取", "Loading"), detail: L("正在查询本机CLI账号额度", "Reading local CLI account usage"), quotas: []) }
     guard now - snapshot.fetchedAt <= controlStaleSeconds, snapshot.fetchedAt <= now + 5,
           !rows.isEmpty, rows.allSatisfy({ row in
               guard let remaining = row.window.remaining, remaining.isFinite, (0...100).contains(remaining) else { return false }
               if let reset = row.window.resetsAt, !reset.isFinite || abs(reset) >= 8.64e12 { return false }
               return true
-          }) else { return ControlState(mode: "unknown", text: "—", headline: "额度未知", detail: "等待有效的额度数据，请重新检测", quotas: rows) }
+          }) else { return ControlState(mode: "unknown", text: "—", headline: L("额度未知", "Usage unknown"), detail: L("等待有效的额度数据，请重新检测", "Waiting for valid usage data. Check again."), quotas: rows) }
     let blocked = rows.filter { $0.window.remaining == 0 }
     if rows.contains(where: { $0.window.resetsAt.map { $0 <= now } ?? false }) {
-        return ControlState(mode: "verifying", text: "确认中", headline: "正在确认恢复", detail: "重置时刻已到，需服务端确认后再显示可用", quotas: rows)
+        return ControlState(mode: "verifying", text: L("确认中", "Checking"), headline: L("正在确认恢复", "Checking availability"), detail: L("重置时刻已到，需服务端确认后再显示可用", "Reset time reached. Waiting for server confirmation."), quotas: rows)
     }
     if !blocked.isEmpty {
         guard blocked.allSatisfy({ $0.window.resetsAt.map { $0.isFinite && $0 > now } ?? false }),
               let reset = blocked.compactMap({ $0.window.resetsAt }).max() else {
-            return ControlState(mode: "unknown", text: "—", headline: "额度受限", detail: "恢复时间未知，请重新检测", quotas: rows)
+            return ControlState(mode: "unknown", text: "—", headline: L("额度受限", "Usage limited"), detail: L("恢复时间未知，请重新检测", "Reset time unknown. Check again."), quotas: rows)
         }
-        return ControlState(mode: "waiting", text: recoveryCountdown(reset, now: now), headline: "等待额度恢复", detail: "\(recoveryCountdown(reset, now: now))后重新确认可用；按较晚恢复时间计算", quotas: rows)
+        return ControlState(mode: "waiting", text: recoveryCountdown(reset, now: now), headline: L("等待额度恢复", "Waiting for reset"), detail: L("\(recoveryCountdown(reset, now: now))后重新确认可用；按较晚恢复时间计算", "Checking again in \(recoveryCountdown(reset, now: now)); waiting for all exhausted limits."), quotas: rows)
     }
-    if snapshot.restricted { return ControlState(mode: "restricted", text: "受限", headline: "账号使用受限", detail: "服务端未允许使用，不能仅凭百分比判断可用", quotas: rows) }
+    if snapshot.restricted { return ControlState(mode: "restricted", text: L("受限", "Limited"), headline: L("账号使用受限", "Account restricted"), detail: L("服务端未允许使用，不能仅凭百分比判断可用", "The server has restricted usage regardless of remaining percentage."), quotas: rows) }
     let selected = rows.first { $0.weekly == weeklySelected } ?? rows.first!
     let number = selected.window.remaining!
     let text = number > 0 && number < 1 ? "<1%" : "\(Int(number.rounded()))%"
     let age = max(0, now - snapshot.fetchedAt)
-    let updated = age < 60 ? "刚刚更新" : "\(Int(age / 60))分钟前"
-    return ControlState(mode: "ready", text: text, headline: updated, detail: "\(selected.title)剩余\(text)", quotas: rows)
+    let updated = age < 60 ? L("刚刚更新", "Just updated") : L("\(Int(age / 60))分钟前", "\(Int(age / 60))m ago")
+    return ControlState(mode: "ready", text: text, headline: updated, detail: L("\(selected.title)剩余\(text)", "\(selected.title): \(text) left"), quotas: rows)
 }
 
 @MainActor
@@ -430,59 +613,63 @@ struct ControlPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 13) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 9) {
                         Image(nsImage: controlIcon()).resizable().frame(width: 20, height: 20)
                         Text("Easy \(controlProduct)").font(.system(size: 16, weight: .semibold))
                         Spacer(minLength: 2)
                         Circle().fill(state.mode == "ready" ? Color.green : Color.orange).frame(width: 6, height: 6)
                         Text(state.headline).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                        iconButton("刷新额度", "arrow.clockwise") { owner.refresh() }
+                        iconButton(L("刷新额度", "Refresh usage"), "arrow.clockwise") { owner.refresh() }
                             .disabled(owner.query != nil)
                     }
                     Divider()
                     if state.login {
                         VStack(alignment: .leading, spacing: 10) {
-                            Label(state.mode == "auth_expired" ? "登录已过期，请重新登录" : "尚未登录 \(controlLoginName)", systemImage: "lock")
+                            Label(state.mode == "auth_expired" ? L("登录已过期，请重新登录", "Login expired. Sign in again.") : L("尚未登录 \(controlLoginName)", "Sign in to \(controlLoginName)"), systemImage: "lock")
                                 .font(.system(size: 14, weight: .semibold))
-                            Text("登录后即可查看剩余额度").font(.system(size: 12)).foregroundStyle(.secondary)
+                            Text(L("登录后即可查看剩余额度", "Sign in to view remaining usage")).font(.system(size: 12)).foregroundStyle(.secondary)
                             Text(controlLoginCommand).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
                                 .padding(8).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
                             HStack {
-                                Button("复制登录命令") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(controlLoginCommand, forType: .string) }
-                                Button("重新检测") { owner.refresh() }.disabled(owner.query != nil)
+                                Button(L("复制登录命令", "Copy login command")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(controlLoginCommand, forType: .string) }
+                                Button(L("重新检测", "Check again")) { owner.refresh() }.disabled(owner.query != nil)
                             }.controlSize(.small)
                         }.padding(.vertical, 4)
                     } else {
                         if !["ready", "waiting"].contains(state.mode) {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(state.headline).font(.system(size: 13, weight: .medium))
-                                Text(state.detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                                Button("重新检测") { owner.refresh() }.controlSize(.small).disabled(owner.query != nil)
+                                Text(displayMessage(state.detail)).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                Button(L("重新检测", "Check again")) { owner.refresh() }.controlSize(.small).disabled(owner.query != nil)
                             }
                         }
                         ForEach(state.quotas) { row in quota(row) }
                         if state.mode == "waiting" {
-                            Text(state.detail).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Text(displayMessage(state.detail)).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     Divider()
                     HStack(spacing: 7) {
                         Image(systemName: "clock").foregroundStyle(.secondary)
-                        Text(clockText(at: Date(), zone: owner.clock.zone)).font(.system(size: 18, weight: .medium)).minimumScaleFactor(0.65).lineLimit(1)
-                            .foregroundColor(Color(nsColor: clockState(at: Date(), zone: owner.clock.zone).color))
+                        let clockParts = floatingClockLines(at: Date(), zone: owner.clock.zone)
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(clockParts.time).font(.system(size: 18, weight: .medium))
+                                .foregroundColor(Color(nsColor: clockState(at: Date(), zone: owner.clock.zone).color))
+                            if let period = clockParts.period { Text(period).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary) }
+                        }.lineLimit(1).minimumScaleFactor(0.65)
                         Spacer(minLength: 4)
-                        Text(owner.clock.cityName).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                        Text(cityLabel(owner.clock.cityName)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                     }.accessibilityElement(children: .combine)
                     Divider()
                     HStack(alignment: .center, spacing: 9) {
                         Image(systemName: "network").foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("网络出口").font(.system(size: 12, weight: .medium))
-                            Text(owner.ipText).font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.7)
+                            Text(L("网络出口", "Network exit")).font(.system(size: 12, weight: .medium))
+                            Text(displayMessage(owner.ipText)).font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.7)
                         }
                         Spacer(minLength: 3)
-                        iconButton("刷新公网IP", "arrow.clockwise") { owner.refreshIP() }.disabled(owner.ipQuery != nil)
+                        iconButton(L("刷新公网IP", "Refresh public IP"), "arrow.clockwise") { owner.refreshIP() }.disabled(owner.ipQuery != nil)
                     }
                     if owner.controlsExpanded { settings }
                 }.padding(16)
@@ -490,17 +677,18 @@ struct ControlPanelView: View {
             Divider()
             HStack {
                 Button { owner.controlsExpanded.toggle(); owner.resizeControls() } label: {
-                    Label(owner.controlsExpanded ? "收起设置" : "更多设置", systemImage: "gearshape")
+                    Label(owner.controlsExpanded ? L("收起设置", "Less settings") : L("更多设置", "More settings"), systemImage: "gearshape")
                 }
                 .buttonStyle(.plain).accessibilityIdentifier("moreSettings")
                 Spacer()
                 Divider().frame(height: 17)
-                Button { owner.quit() } label: { Label("退出", systemImage: "power") }.buttonStyle(.plain)
+                Button { owner.quit() } label: { Label(L("退出", "Quit"), systemImage: "power") }.buttonStyle(.plain)
             }.font(.system(size: 12)).padding(.horizontal, 16).padding(.vertical, 12)
         }
         .frame(width: 360, height: owner.controlHeight)
         .background(Color(red: 0.09, green: 0.11, blue: 0.13))
         .preferredColorScheme(.dark)
+        .lineSpacing(2)
     }
     func iconButton(_ label: String, _ image: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: image).frame(width: 20, height: 20) }
@@ -522,17 +710,17 @@ struct ControlPanelView: View {
                             Capsule().fill(Color(nsColor: RingState.resolve(value, stale: !valid).color))
                                 .frame(width: geometry.size.width * (value ?? 0) / 100)
                         }
-                    }.frame(height: 5).accessibilityLabel("剩余额度进度")
-                    Text(valid ? resetDescription(row.window.resetsAt, weekly: row.weekly) : "等待有效额度数据")
+                    }.frame(height: 5).accessibilityLabel(L("剩余额度进度", "Remaining usage"))
+                    Text(valid ? resetDescription(row.window.resetsAt, weekly: row.weekly) : L("等待有效额度数据", "Waiting for usage data"))
                         .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
                 }
                 HStack(spacing: 3) {
-                    Text("剩余").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(L("剩余", "Left")).font(.system(size: 10)).foregroundStyle(.secondary)
                     Text(value.map { $0 > 0 && $0 < 1 ? "<1%" : "\(Int($0.rounded()))%" } ?? "—")
                         .font(.system(size: 14, weight: .semibold)).foregroundColor(Color(nsColor: RingState.resolve(value, stale: !valid).color))
                 }.frame(minWidth: 62, alignment: .trailing)
             }.padding(.vertical, 3).contentShape(Rectangle())
-        }.buttonStyle(.plain).help("点击选择圆环及状态栏的中心额度")
+        }.buttonStyle(.plain).help(L("点击选择圆环及状态栏的中心额度", "Select the usage shown in the ring and menu bar"))
     }
     func setting(_ label: String, value: Bool, action: @escaping () -> Void) -> some View {
         HStack {
@@ -540,54 +728,63 @@ struct ControlPanelView: View {
             Spacer()
             Toggle(label, isOn: Binding(get: { value }, set: { _ in action(); owner.resizeControls() }))
                 .labelsHidden().toggleStyle(.switch).tint(.green).controlSize(.mini).accessibilityIdentifier(label)
-        }
+        }.frame(minHeight: 20)
     }
     var settings: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(L("语言", "Language")).font(.system(size: 12))
+                Spacer()
+                Picker(L("语言", "Language"), selection: Binding(get: { UserDefaults.standard.string(forKey: "interfaceLanguage") ?? "system" }, set: { owner.setLanguage($0) })) {
+                    Text(L("跟随系统", "System default")).tag("system")
+                    Text("简体中文").tag("zh")
+                    Text("English").tag("en")
+                }.labelsHidden().frame(width: 155).accessibilityIdentifier("interfaceLanguage")
+            }
             Divider()
-            Text("浮窗与时间").font(.system(size: 10)).foregroundStyle(.secondary)
-            setting("显示时间", value: owner.clockEnabled) { owner.toggleClock() }
-            setting("跟随IP时区", value: owner.followIPTimeZone) { owner.toggleFollowIPTimeZone() }
+            Text(L("浮窗与时间", "Overlay & time")).font(.system(size: 10)).foregroundStyle(.secondary)
+            setting(L("显示时间", "Show time"), value: owner.clockEnabled) { owner.toggleClock() }
+            setting(L("跟随IP时区", "Follow IP time zone"), value: owner.followIPTimeZone) { owner.toggleFollowIPTimeZone() }
             if owner.followIPTimeZone && owner.ipClock.zone == nil {
-                Text("IP时区不可用，暂用自定义时间").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(L("IP时区不可用，暂用自定义时间", "IP time zone unavailable; using manual time")).font(.system(size: 10)).foregroundStyle(.secondary)
             }
             if !owner.followIPTimeZone {
                 HStack {
-                    Text("手动时区").font(.system(size: 12))
+                    Text(L("手动时区", "Manual time zone")).font(.system(size: 12))
                     Spacer()
-                    Picker("手动时区", selection: Binding(get: { owner.manualClockCity }, set: { name in
+                    Picker(L("手动时区", "Manual time zone"), selection: Binding(get: { owner.manualClockCity }, set: { name in
                         let item = NSMenuItem(); item.representedObject = name; owner.selectTimeZone(item)
                     })) {
-                        ForEach(ClockCity.presets, id: \.name) { city in Text(city.name).tag(city.name) }
-                        if !ClockCity.presets.contains(where: { $0.name == owner.manualClockCity }) { Text(owner.manualClockCity).tag(owner.manualClockCity) }
+                        ForEach(ClockCity.presets, id: \.name) { city in Text(cityLabel(city.name)).tag(city.name) }
+                        if !ClockCity.presets.contains(where: { $0.name == owner.manualClockCity }) { Text(cityLabel(owner.manualClockCity)).tag(owner.manualClockCity) }
                     }.labelsHidden().frame(width: 155)
                 }
                 HStack {
                     Text(owner.manualClockZone.identifier).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
-                    Button("自定义…") { owner.customTimeZone(); owner.resizeControls() }.buttonStyle(.link).font(.system(size: 10))
+                    Button(L("自定义…", "Custom…")) { owner.customTimeZone(); owner.resizeControls() }.buttonStyle(.link).font(.system(size: 10))
                 }
             }
             HStack {
-                Text("浮窗位置").font(.system(size: 12)); Spacer()
-                Button("恢复默认位置") { owner.resetPosition() }.controlSize(.small)
-            }
+                Text(L("浮窗位置", "Overlay position")).font(.system(size: 12)); Spacer()
+                Button(L("恢复默认位置", "Reset position")) { owner.resetPosition() }.controlSize(.small)
+            }.frame(minHeight: 20)
             Divider()
-            Text("提醒与启动").font(.system(size: 10)).foregroundStyle(.secondary)
-            setting("额度可用提醒", value: owner.reminder != nil) { owner.toggleReminder() }.disabled(owner.reminderAuthorizing)
-            if let message = owner.reminderError { Text(message).font(.system(size: 10)).foregroundStyle(.orange) }
-            if let reminder = owner.reminder { Text("等待恢复：" + recoveryCountdown(reminder.due, now: Date().timeIntervalSince1970)).font(.system(size: 10)).foregroundStyle(.secondary) }
-            setting("开机启动", value: LoginStartup.enabled()) { owner.toggleLoginStartup() }
+            Text(L("提醒与启动", "Reminder & startup")).font(.system(size: 10)).foregroundStyle(.secondary)
+            setting(L("额度可用提醒", "Usage available alert"), value: owner.reminder != nil) { owner.toggleReminder() }.disabled(owner.reminderAuthorizing)
+            if let message = owner.reminderError { Text(displayMessage(message)).font(.system(size: 10)).foregroundStyle(.orange) }
+            if let reminder = owner.reminder { Text(L("等待恢复：", "Waiting: ") + recoveryCountdown(reminder.due, now: Date().timeIntervalSince1970)).font(.system(size: 10)).foregroundStyle(.secondary) }
+            setting(L("开机启动", "Launch at login"), value: LoginStartup.enabled()) { owner.toggleLoginStartup() }
             Divider()
-            Text("版本与更新").font(.system(size: 10)).foregroundStyle(.secondary)
-            setting("自动更新", value: UserDefaults.standard.bool(forKey: "automaticUpdatesEnabled")) { owner.toggleAutomaticUpdates() }
+            Text(L("版本与更新", "Version & updates")).font(.system(size: 10)).foregroundStyle(.secondary)
+            setting(L("自动更新", "Automatic updates"), value: UserDefaults.standard.bool(forKey: "automaticUpdatesEnabled")) { owner.toggleAutomaticUpdates() }
             HStack {
                 Text("v\(owner.appVersion)").font(.system(size: 11))
-                if owner.updateAvailable { Circle().fill(Color.green).frame(width: 5, height: 5); Text("有新版本").font(.system(size: 10)).foregroundStyle(.secondary) }
+                if owner.updateAvailable { Circle().fill(Color.green).frame(width: 5, height: 5); Text(L("有新版本", "Update available")).font(.system(size: 10)).foregroundStyle(.secondary) }
                 Spacer()
-                Button(owner.updater == nil ? "检查并更新" : "正在更新…") { owner.updateVersion() }.controlSize(.small).disabled(owner.updater != nil)
+                Button(owner.updater == nil ? L("检查并更新", "Check for updates") : L("正在更新…", "Updating…")) { owner.updateVersion() }.controlSize(.small).disabled(owner.updater != nil)
             }
-            if let message = owner.versionCheckError ?? owner.automaticUpdateError { Text(message).font(.system(size: 10)).foregroundStyle(.orange) }
+            if let message = owner.versionCheckError ?? owner.automaticUpdateError { Text(displayMessage(message)).font(.system(size: 10)).foregroundStyle(.orange) }
         }
     }
 }
@@ -614,21 +811,21 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var controlHeight: CGFloat {
         let state = currentControlState()
         let quotaHeight: CGFloat = state.login ? 155 : CGFloat(max(1, state.quotas.count)) * 62 + (state.mode == "ready" ? 0 : 65)
-        let total: CGFloat = 205 + quotaHeight + (controlsExpanded ? (followIPTimeZone ? 280 : 345) : 0)
+        let total: CGFloat = (controlsExpanded ? 198 : 174) + quotaHeight + (controlsExpanded ? (followIPTimeZone ? 355 : 420) : 0)
         return min(total, max(280, (status?.button?.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 900) - 65))
     }
     var status: NSStatusItem?
     var timer: Timer?
     var ipQuery: Process?
     var ipLastAttempt = Date.distantPast
-    var ipText = "正在获取IP…"
+    var ipText = L("正在获取IP…", "Fetching IP…")
     var query: Process?
     var updater: Process?
     var versionCheck: Process?
     var updateAvailable = false
     var automaticUpdateError: String?
     var versionCheckError: String?
-    let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "未知"
+    let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? L("未知", "Unknown")
     var reminder = UserDefaults.standard.data(forKey: "availabilityReminder").flatMap { try? JSONDecoder().decode(AvailabilityReminder.self, from: $0) }
     var reminderSending = false
     var reminderAuthorizing = false
@@ -637,6 +834,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var snapshot: Snapshot?
     var error: String?
     var lastAttempt = Date.distantPast
+    var usageSchedule = UsageRefreshSchedule()
     var lastRect: CGRect?
     var inset = CGPoint(x: 138, y: 4)
     var node = ""
@@ -706,7 +904,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         status?.button?.target = self
         status?.button?.action = #selector(openControls)
         status?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        status?.button?.toolTip = "Easy Claude 额度浮窗"
+        status?.button?.toolTip = L("Easy Claude 额度浮窗", "Easy Claude overlay")
         controlPopover.appearance = NSAppearance(named: .darkAqua)
         controlPopover.behavior = .transient
         controlPopover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -716,7 +914,12 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         tick()
     }
     func currentControlState(now: Double = Date().timeIntervalSince1970) -> ControlState {
-        controlState(snapshot: snapshot, error: error, code: controlErrorCode, weeklySelected: ring.showWeeklyPercentage, now: now)
+        if !usageSchedule.allows(now) {
+            let remaining = recoveryCountdown(usageSchedule.nextAllowedAt, now: now)
+            return ControlState(mode: "rate_limited", text: L("限流", "Rate limited"), headline: L("请求过于频繁", "Too many requests"),
+                detail: L("服务限流，\(remaining)后自动重试；手动刷新也会等待。", "Rate limited. Retrying in \(remaining); manual refresh also waits."), quotas: [])
+        }
+        return controlState(snapshot: snapshot, error: error, code: controlErrorCode, weeklySelected: ring.showWeeklyPercentage, now: now)
     }
     func refreshControls() {
         let state = currentControlState()
@@ -726,6 +929,17 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         if status?.button?.toolTip != tip { status?.button?.toolTip = tip }
         status?.button?.setAccessibilityLabel("Easy \(controlProduct) \(state.headline) \(state.text)")
         if controlPopover.isShown { resizeControls() }
+    }
+    func setLanguage(_ value: String) {
+        guard AppLanguage(rawValue: value) != nil else { return }
+        UserDefaults.standard.set(value, forKey: "interfaceLanguage")
+        updateRing()
+        clock.needsDisplay = true
+        refreshControls()
+        resizeControls()
+    }
+    @objc func selectLanguage(_ sender: NSMenuItem) {
+        if let value = sender.representedObject as? String { setLanguage(value) }
     }
     func resizeControls() {
         controlRevision += 1
@@ -748,9 +962,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     @objc func tick() {
         checkVersionIfNeeded()
         if Date().timeIntervalSince(ipLastAttempt) >= 300 { refreshIP() }
-        if let reminder, Date().timeIntervalSince(lastAttempt) >= (Date().timeIntervalSince1970 >= reminder.due ? 60 : 300) { refresh() }
-        let resetDue = snapshot?.windows.contains { $0.resetsAt.map { $0 <= Date().timeIntervalSince1970 } ?? false } ?? false
-        if Date().timeIntervalSince(lastAttempt) >= 300 || (resetDue && Date().timeIntervalSince(lastAttempt) >= 60) { refresh() }
+        if Date().timeIntervalSince(lastAttempt) >= 60 { refresh() }
         refreshControls()
         guard let rect = targetWindow() else { hide(); lastRect = nil; return }
         lastRect = rect
@@ -761,13 +973,12 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 clockPanel.setFrameOrigin(CGPoint(x: x, y: y))
             }
             clock.needsDisplay = true
-            clock.toolTip = "\(clock.cityName) · \(clock.zone.identifier)"
-            clock.setAccessibilityLabel("\(clock.cityName) \(clock.zone.identifier) \(clockText(at: Date(), zone: clock.zone))")
+            clock.toolTip = "\(cityLabel(clock.cityName)) · \(clock.zone.identifier)"
+            clock.setAccessibilityLabel("\(cityLabel(clock.cityName)) \(clock.zone.identifier) \(clockText(at: Date(), zone: clock.zone))")
             if !clockPanel.isVisible { clockPanel.orderFrontRegardless() }
         } else { clockPanel.orderOut(nil) }
         if !ring.dragging { panel.setFrameOrigin(ringOrigin(in: rect, inset: inset)) }
         if !panel.isVisible { panel.orderFrontRegardless() }
-        if Date().timeIntervalSince(lastAttempt) >= 300 { refresh() }
         updateRing()
     }
     func updateRing() {
@@ -785,24 +996,24 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         ring.stale = stale(fiveHour)
         ring.weeklyRemaining = weekly?.remaining
         ring.weeklyStale = stale(weekly)
-        func label(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? "未知" }
+        func label(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? L("未知", "Unknown") }
         let summary = [
-            weekly == nil ? nil : "外侧粗环 · 周额度：\(label(weekly?.remaining))\(ring.weeklyStale ? "（未知或已过期）" : "")",
-            fiveHour == nil ? nil : "\(weekly == nil ? "单环" : "内侧细环") · 5 小时：\(label(fiveHour?.remaining))\(ring.stale ? "（未知或已过期）" : "")"
+            weekly.map { _ in L("周", "Weekly") + ": " + label(weekly?.remaining) },
+            fiveHour.map { _ in L("5小时", "5-hour") + ": " + label(fiveHour?.remaining) }
         ].compactMap { $0 }.joined(separator: "\n")
-        let fetched = snapshot.map { Date(timeIntervalSince1970: $0.fetchedAt).formatted(date: .omitted, time: .standard) } ?? "尚未更新"
-        ring.toolTip = "本机 Claude CLI 账号额度\n\(summary)\n\(error ?? snapshot?.detail ?? "正在读取")\n更新时间：\(fetched)\n中心数字为\(ring.displaysWeeklyPercentage ? "周" : "5小时")剩余；拖动校准位置；双击刷新；右键打开菜单"
+        ring.toolTip = "Claude CLI\n" + summary + "\n" + currentControlState().headline
         ring.setAccessibilityLabel("Claude \(summary)")
         ring.needsDisplay = true
     }
     @objc func refresh() {
-        guard query == nil else { return }
+        guard query == nil, usageSchedule.allows(Date().timeIntervalSince1970) else { return }
         lastAttempt = Date()
         let process = Process(), pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: node)
         process.arguments = [script]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = searchPath
+        env["EASY_LANGUAGE"] = AppLanguage.current.rawValue
         if !claudeHome.isEmpty { env["CLAUDE_CONFIG_DIR"] = claudeHome }
         process.environment = env
         process.standardOutput = pipe
@@ -814,11 +1025,14 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 self.query = nil
                 do {
                     let value = try JSONDecoder().decode(Snapshot.self, from: data)
+                    self.usageSchedule.receive(rateLimited: value.errorCode == "rate_limited" && value.error != nil,
+                        succeeded: value.error == nil && process.terminationStatus == 0 && value.fetchedAt > 0,
+                        now: Date().timeIntervalSince1970)
                     if let message = value.error { self.error = message; self.controlErrorCode = value.errorCode }
                     else if process.terminationStatus == 0, value.fetchedAt > 0 {
                         self.snapshot = value; self.error = nil; self.controlErrorCode = nil
-                    } else { self.error = "额度查询失败"; self.controlErrorCode = nil }
-                } catch { self.error = "无法读取额度响应，请检查 CLI 和网络"; self.controlErrorCode = nil }
+                    } else { self.error = L("额度查询失败", "Usage query failed"); self.controlErrorCode = nil }
+                } catch { self.error = L("无法读取额度响应，请检查 CLI 和网络", "Cannot read usage. Check the CLI and network."); self.controlErrorCode = nil }
                 self.checkReminder()
                 self.updateRing()
                 self.refreshControls()
@@ -826,11 +1040,11 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         }
         query = process
         do { try process.run() }
-        catch { query = nil; self.controlErrorCode = nil; self.error = "无法启动额度查询，请重新运行 easy-claude show"; updateRing() }
+        catch { query = nil; self.controlErrorCode = nil; self.error = L("无法启动额度查询，请重新运行 easy-claude show", "Cannot start query. Run easy-claude show again."); updateRing() }
     }
     func applyClockTimeZone() {
         clock.zone = ipClock.resolved(manual: manualClockZone, following: followIPTimeZone)
-        clock.cityName = followIPTimeZone && ipClock.zone != nil ? (ipClockCity ?? "城市未知") : manualClockCity
+        clock.cityName = followIPTimeZone && ipClock.zone != nil ? (ipClockCity ?? L("城市未知", "Unknown city")) : manualClockCity
         clock.needsDisplay = true
     }
     func receiveIPTimeZone(_ identifier: String?, city: String? = nil) {
@@ -852,6 +1066,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         process.arguments = [URL(fileURLWithPath: script).deletingLastPathComponent().appendingPathComponent("overlay-ip.js").path]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = searchPath
+        env["EASY_LANGUAGE"] = AppLanguage.current.rawValue
         process.environment = env
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -869,7 +1084,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         }
         ipQuery = process
         do { try process.run() }
-        catch { ipQuery = nil; ipText = "IP异常"; receiveIPTimeZone(nil) }
+        catch { ipQuery = nil; ipText = L("IP异常", "IP unavailable"); receiveIPTimeZone(nil) }
     }
     func saveReminder() {
         if let reminder, let data = try? JSONEncoder().encode(reminder) {
@@ -888,7 +1103,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         let now = Date().timeIntervalSince1970
         guard error == nil, let snapshot, now - snapshot.fetchedAt <= 600,
               let candidate = AvailabilityReminder.arm(reminderWindows(snapshot.windows), now: now) else {
-            reminderError = "当前额度可用，或缺少有效额度/重置时间；请刷新后重试"
+            reminderError = L("当前额度可用，或缺少有效额度/重置时间；请刷新后重试", "Usage is available, or usage/reset data is missing. Refresh and try again.")
             refresh(); return
         }
         reminderAuthorizing = true
@@ -897,7 +1112,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 guard let self else { return }
                 self.reminderAuthorizing = false
                 if allowed { self.reminder = candidate; self.saveReminder() }
-                else { self.reminderError = "请在系统设置中允许本工具发送通知，再开启提醒" }
+                else { self.reminderError = L("请在系统设置中允许本工具发送通知，再开启提醒", "Allow notifications in System Settings before enabling this alert.") }
             }
         }
     }
@@ -917,12 +1132,12 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 guard generation == self.reminderGeneration, self.reminder != nil else { self.reminderSending = false; return }
                 guard allowed else {
                     self.reminderSending = false
-                    self.reminderError = "通知未获允许，提醒已保留；请在系统设置允许通知"
+                    self.reminderError = L("通知未获允许，提醒已保留；请在系统设置允许通知", "Notifications are blocked. Alert kept; allow notifications in System Settings.")
                     return
                 }
                 let content = UNMutableNotificationContent()
-                content.title = "Claude 额度已恢复"
-                content.body = "已确认当前额度可用，可以继续使用了。"
+                content.title = L("Claude 额度已恢复", "Claude usage available")
+                content.body = L("已确认当前额度可用，可以继续使用了。", "Usage is confirmed available. You can continue.")
                 content.sound = .default
                 UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "quota-available", content: content, trigger: nil)) { @Sendable [weak self] error in
                     let failed = error != nil
@@ -930,7 +1145,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                         guard let self else { return }
                         if generation == self.reminderGeneration {
                             if !failed { self.reminder = nil; self.reminderError = nil; self.saveReminder() }
-                            else { self.reminderError = "通知发送失败，提醒已保留，将稍后重试" }
+                            else { self.reminderError = L("通知发送失败，提醒已保留，将稍后重试", "Notification failed. Alert kept; will retry.") }
                         }
                         self.reminderSending = false
                     }
@@ -943,63 +1158,63 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         completionHandler([.banner, .sound, .list])
     }
     func item(_ title: String, _ action: Selector?) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        let item = NSMenuItem(title: displayMessage(title), action: action, keyEquivalent: "")
         item.target = self
         return item
     }
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(item("Easy Claude · CLI 账号额度", nil))
-        menu.addItem(item(lastRect == nil ? "等待 Claude 前台窗口" : "拖动圆环可调整位置", nil))
+        menu.addItem(item(L("Easy Claude · CLI 账号额度", "Easy Claude · CLI account usage"), nil))
+        menu.addItem(item(lastRect == nil ? L("等待 Claude 前台窗口", "Waiting for Claude foreground window") : L("拖动圆环可调整位置", "Drag the ring to reposition"), nil))
         if let error { menu.addItem(item(error, nil)) }
-        if snapshot?.restricted == true { menu.addItem(item("服务端提示：当前使用受限", nil)) }
+        if snapshot?.restricted == true { menu.addItem(item(L("服务端提示：当前使用受限", "Server reports restricted usage"), nil)) }
         let address = item(ipText, ipQuery == nil ? #selector(refreshIP) : nil)
-        address.toolTip = "点击刷新公网IP；城市为网络出口位置"
+        address.toolTip = L("点击刷新公网IP；城市为网络出口位置", "Click to refresh public IP; city is the network exit location")
         menu.addItem(address)
         menu.addItem(.separator())
-        for (id, label) in [("five_hour:primary", "5小时"), ("seven_day:primary", "周")] {
+        for (id, label) in [("five_hour:primary", L("5小时", "5-hour")), ("seven_day:primary", L("周", "Weekly"))] {
             guard let window = snapshot?.windows.first(where: { $0.id == id }) else { continue }
-            let remaining = window.remaining.map { "\(Int($0.rounded()))%" } ?? "未知"
+            let remaining = window.remaining.map { "\(Int($0.rounded()))%" } ?? L("未知", "Unknown")
             let reset = resetDescription(window.resetsAt, weekly: id == "seven_day:primary")
             let option = item("\(label) · \(remaining) · \(reset)", #selector(selectPercentage(_:)))
             option.representedObject = id
             option.state = (ring.displaysWeeklyPercentage == (id == "seven_day:primary")) ? .on : .off
             menu.addItem(option)
         }
-        menu.addItem(item(query == nil ? "立即刷新" : "正在刷新…", query == nil ? #selector(refresh) : nil))
-        let alarm = item("额度可用提醒", reminderAuthorizing ? nil : #selector(toggleReminder))
+        menu.addItem(item(query == nil ? L("立即刷新", "Refresh now") : L("正在刷新…", "Refreshing…"), query == nil ? #selector(refresh) : nil))
+        let alarm = item(L("额度可用提醒", "Usage available alert"), reminderAuthorizing ? nil : #selector(toggleReminder))
         alarm.state = reminder == nil ? .off : .on
         menu.addItem(alarm)
         if let reminder {
-            menu.addItem(item("等待额度恢复 · " + resetDescription(reminder.due, weekly: true), nil))
+            menu.addItem(item(L("等待额度恢复 · ", "Waiting for reset · ") + resetDescription(reminder.due, weekly: true), nil))
         }
         if let reminderError { menu.addItem(item(reminderError, nil)) }
-        menu.addItem(item("恢复默认位置", #selector(resetPosition)))
+        menu.addItem(item(L("恢复默认位置", "Reset position"), #selector(resetPosition)))
         menu.addItem(.separator())
-        let toggle = item("显示时间", #selector(toggleClock))
+        let toggle = item(L("显示时间", "Show time"), #selector(toggleClock))
         toggle.state = clockEnabled ? .on : .off
         menu.addItem(toggle)
-        let follow = item("跟随IP时区", #selector(toggleFollowIPTimeZone))
+        let follow = item(L("跟随IP时区", "Follow IP time zone"), #selector(toggleFollowIPTimeZone))
         follow.state = followIPTimeZone ? .on : .off
         menu.addItem(follow)
         if followIPTimeZone && ipClock.zone == nil {
-            menu.addItem(item("IP时区不可用，显示自定义时间", nil))
+            menu.addItem(item(L("IP时区不可用，显示自定义时间", "IP time zone unavailable; using manual time"), nil))
         }
         if !followIPTimeZone {
             let zones = NSMenu()
             for city in ClockCity.presets {
-                let option = item(city.name, #selector(selectTimeZone(_:)))
+                let option = item(cityLabel(city.name), #selector(selectTimeZone(_:)))
                 option.representedObject = city.name
                 option.state = clock.cityName == city.name && clock.zone.identifier == city.identifier ? .on : .off
                 zones.addItem(option)
             }
-            zones.addItem(item("自定义时区…", #selector(customTimeZone)))
-            let zoneItem = item("\(clock.cityName)·\(clockText(at: Date(), zone: clock.zone))", nil)
+            zones.addItem(item(L("自定义时区…", "Custom time zone…"), #selector(customTimeZone)))
+            let zoneItem = item("\(cityLabel(clock.cityName))·\(clockText(at: Date(), zone: clock.zone))", nil)
             zoneItem.submenu = zones
             menu.addItem(zoneItem)
         }
         menu.addItem(.separator())
-        let updateItem = item(updater == nil ? "更新版本·\(appVersion)" : "正在更新…·\(appVersion)",
+        let updateItem = item(updater == nil ? L("更新版本·\(appVersion)", "Update·\(appVersion)") : L("正在更新…·\(appVersion)", "Updating…·\(appVersion)"),
                               updater == nil ? #selector(updateVersion) : nil)
         if updateAvailable {
             let title = NSMutableAttributedString(string: updateItem.title + "\t●")
@@ -1009,19 +1224,27 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             title.addAttribute(.foregroundColor, value: NSColor.systemGreen,
                                range: NSRange(location: title.length - 1, length: 1))
             updateItem.attributedTitle = title
-            updateItem.setAccessibilityHelp("有新版本可更新")
+            updateItem.setAccessibilityHelp(L("有新版本可更新", "A new version is available"))
         }
         menu.addItem(updateItem)
-        let automatic = item("自动更新", #selector(toggleAutomaticUpdates))
+        let automatic = item(L("自动更新", "Automatic updates"), #selector(toggleAutomaticUpdates))
         automatic.state = UserDefaults.standard.bool(forKey: "automaticUpdatesEnabled") ? .on : .off
         menu.addItem(automatic)
         if let automaticUpdateError { menu.addItem(item(automaticUpdateError, nil)) }
         if let versionCheckError { menu.addItem(item(versionCheckError, nil)) }
-        let startup = item("开机启动", #selector(toggleLoginStartup))
+        let startup = item(L("开机启动", "Launch at login"), #selector(toggleLoginStartup))
         startup.state = LoginStartup.enabled() ? .on : .off
-        startup.toolTip = "登录当前macOS用户后自动打开浮窗"
+        startup.toolTip = L("登录当前macOS用户后自动打开浮窗", "Open overlay when this macOS user signs in")
         menu.addItem(startup)
-        menu.addItem(item("退出浮窗", #selector(quit)))
+        let languages = NSMenu()
+        for (value, title) in [("system", L("跟随系统", "System default")), ("zh", "简体中文"), ("en", "English")] {
+            let option = item(title, #selector(selectLanguage(_:)))
+            option.representedObject = value
+            option.state = (UserDefaults.standard.string(forKey: "interfaceLanguage") ?? "system") == value ? .on : .off
+            languages.addItem(option)
+        }
+        let language = item(L("语言", "Language"), nil); language.submenu = languages; menu.addItem(language)
+        menu.addItem(item(L("退出浮窗", "Quit overlay"), #selector(quit)))
         return menu
     }
     @objc func toggleLoginStartup() {
@@ -1033,7 +1256,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             try LoginStartup.setEnabled(!LoginStartup.enabled(), node: node, cli: cli, environment: environment)
         } catch {
             let alert = NSAlert()
-            alert.messageText = "无法设置开机启动"
+            alert.messageText = L("无法设置开机启动", "Cannot change launch at login")
             alert.informativeText = error.localizedDescription
             alert.runModal()
         }
@@ -1073,17 +1296,17 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     @objc func customTimeZone() {
         let alert = NSAlert()
-        alert.messageText = "设置电子时钟时区"
-        alert.informativeText = "输入 IANA 时区，例如 America/Los_Angeles；自动适应夏令时。"
+        alert.messageText = L("设置电子时钟时区", "Set clock time zone")
+        alert.informativeText = L("输入 IANA 时区，例如 America/Los_Angeles；自动适应夏令时。", "Enter an IANA time zone, e.g. America/Los_Angeles. Daylight saving is automatic.")
         let field = NSTextField(string: clock.zone.identifier)
         field.frame = CGRect(x: 0, y: 0, width: 300, height: 24)
         alert.accessoryView = field
-        alert.addButton(withTitle: "保存")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L("保存", "Save"))
+        alert.addButton(withTitle: L("取消", "Cancel"))
         NSApp.activate(ignoringOtherApps: true)
         while alert.runModal() == .alertFirstButtonReturn {
             if setTimeZone(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) { break }
-            alert.informativeText = "无效时区，请输入有效的 IANA 名称，例如 America/Los_Angeles。"
+            alert.informativeText = L("无效时区，请输入有效的 IANA 名称，例如 America/Los_Angeles。", "Invalid time zone. Enter an IANA name, e.g. America/Los_Angeles.")
         }
     }
     @objc func resetPosition() {
@@ -1116,6 +1339,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             .appendingPathComponent("check-update.js").path]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = searchPath
+        env["EASY_LANGUAGE"] = AppLanguage.current.rawValue
         process.environment = env
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -1127,7 +1351,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 guard let self else { return }
                 self.versionCheck = nil
                 guard let available else {
-                    self.versionCheckError = "版本检查失败，保留上次结果"
+                    self.versionCheckError = L("版本检查失败，保留上次结果", "Update check failed; keeping the last result")
                     return
                 }
                 self.versionCheckError = nil
@@ -1140,7 +1364,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         }
         versionCheck = process
         do { try process.run() }
-        catch { versionCheck = nil; versionCheckError = "版本检查失败，保留上次结果" }
+        catch { versionCheck = nil; versionCheckError = L("版本检查失败，保留上次结果", "Update check failed; keeping the last result") }
     }
     @objc func toggleAutomaticUpdates() {
         let prefs = UserDefaults.standard
@@ -1159,21 +1383,22 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         process.arguments = [cli.path]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = searchPath
+        env["EASY_LANGUAGE"] = AppLanguage.current.rawValue
         process.environment = env
         // npm 输出可能超过管道容量，写临时文件以免等待退出时死锁。
         let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         guard FileManager.default.createFile(atPath: output.path, contents: nil,
             attributes: [.posixPermissions: 0o600]), let handle = try? FileHandle(forUpdating: output) else {
-            if automatic { automaticUpdateError = "自动更新失败：无法创建更新日志" }
-            else { showUpdateResult("无法创建更新日志，请检查临时目录权限。") }
+            if automatic { automaticUpdateError = L("自动更新失败：无法创建更新日志", "Automatic update failed: cannot create log") }
+            else { showUpdateResult(L("无法创建更新日志，请检查临时目录权限。", "Cannot create update log. Check temporary directory permissions.")) }
             return
         }
         // 先取消文件名，描述符仍可读写；旧浮窗退出后也不会遗留日志。
         do { try FileManager.default.removeItem(at: output) }
         catch {
             try? handle.close()
-            if automatic { automaticUpdateError = "自动更新失败：无法清理临时日志" }
-            else { showUpdateResult("无法清理临时更新日志，请检查临时目录权限。") }
+            if automatic { automaticUpdateError = L("自动更新失败：无法清理临时日志", "Automatic update failed: cannot remove temporary log") }
+            else { showUpdateResult(L("无法清理临时更新日志，请检查临时目录权限。", "Cannot remove update log. Check temporary directory permissions.")) }
             return
         }
         process.standardOutput = handle
@@ -1187,10 +1412,10 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                 guard let self else { return }
                 self.updater = nil
                 if automatic {
-                    if process.terminationStatus != 0 { self.automaticUpdateError = "自动更新失败，请点击更新版本查看原因" }
+                    if process.terminationStatus != 0 { self.automaticUpdateError = L("自动更新失败，请点击更新版本查看原因", "Automatic update failed. Check for updates to view details.") }
                 } else {
                     self.showUpdateResult(process.terminationStatus == 0
-                        ? message : "更新失败，请检查网络或安装目录权限。\n" + message)
+                        ? message : L("更新失败，请检查网络或安装目录权限。\n", "Update failed. Check network and installation permissions.\n") + message)
                 }
             }
         }
@@ -1199,15 +1424,15 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         catch {
             updater = nil
             try? handle.close()
-            if automatic { automaticUpdateError = "自动更新失败：无法启动更新" }
-            else { showUpdateResult("无法启动更新，请重新运行 easy-claude show。") }
+            if automatic { automaticUpdateError = L("自动更新失败：无法启动更新", "Automatic update failed: cannot start updater") }
+            else { showUpdateResult(L("无法启动更新，请重新运行 easy-claude show。", "Cannot start updater. Run easy-claude show again.")) }
         }
     }
     func showUpdateResult(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "更新版本"
-        alert.informativeText = message
-        alert.addButton(withTitle: "好")
+        alert.messageText = L("更新版本", "Check for updates")
+        alert.informativeText = displayMessage(message)
+        alert.addButton(withTitle: L("好", "OK"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
@@ -1223,6 +1448,14 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
 
 @MainActor
 func runControlChecks() {
+    precondition(AppLanguage.resolve(nil, preferred: ["zh-Hant-TW", "en"]) == .zh)
+    precondition(AppLanguage.resolve("system", preferred: ["en-US", "zh-Hans"]) == .en)
+    precondition(AppLanguage.resolve("zh", preferred: ["en-US"]) == .zh)
+    precondition(AppLanguage.resolve("en", preferred: ["zh-Hans"]) == .en)
+    precondition(AppLanguage.resolve("invalid", preferred: ["fr-FR"]) == .en)
+    let originalLanguage = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+    UserDefaults.standard.setVolatileDomain(["interfaceLanguage": "zh"], forName: UserDefaults.argumentDomain)
+    defer { UserDefaults.standard.setVolatileDomain(originalLanguage, forName: UserDefaults.argumentDomain) }
     let now = 1_800_000_000.0
     func sample(_ five: Double? = 94, _ week: Double? = 77, fiveReset: Double? = nil, weekReset: Double? = nil, age: Double = 0, restricted: Bool = false) -> Snapshot {
         func row(_ weekly: Bool, _ remaining: Double?, _ reset: Double?) -> [String: Any] {
@@ -1294,6 +1527,9 @@ struct Main {
         }
 
         if CommandLine.arguments.contains("--self-test") {
+            let savedLanguage = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+            UserDefaults.standard.setVolatileDomain(["interfaceLanguage": "zh"], forName: UserDefaults.argumentDomain)
+            defer { UserDefaults.standard.setVolatileDomain(savedLanguage, forName: UserDefaults.argumentDomain) }
             let manualIPTest = TimeZone(identifier: "Asia/Shanghai")!
             var ipClockTest = IPClockState()
             precondition(ipClockTest.resolved(manual: manualIPTest, following: true) == manualIPTest)
@@ -1360,13 +1596,18 @@ struct Main {
             clockMenuTest.receiveIPTimeZone("America/Los_Angeles")
             precondition(clockMenuTest.clock.cityName == "城市未知")
             clockMenuTest.receiveIPTimeZone("America/Los_Angeles", city: "Los Angeles")
-            precondition(!clockMenuTest.makeMenu().items.contains { $0.submenu != nil })
+            precondition(!clockMenuTest.makeMenu().items.contains { item in
+                item.submenu?.items.contains { ($0.representedObject as? String) == "上海" } == true
+            })
+            precondition(clockMenuTest.makeMenu().items.contains { $0.title == "语言" && $0.submenu?.items.count == 3 })
             clockMenuTest.receiveIPTimeZone(nil)
             precondition(clockMenuTest.clock.zone == manualIPTest && clockMenuTest.clock.cityName == "上海")
             precondition(clockMenuTest.followIPTimeZone)
             clockMenuTest.followIPTimeZone = false
             clockMenuTest.applyClockTimeZone()
-            precondition(clockMenuTest.makeMenu().items.contains { $0.submenu != nil })
+            precondition(clockMenuTest.makeMenu().items.contains { item in
+                item.submenu?.items.contains { ($0.representedObject as? String) == "上海" } == true
+            })
             print("跟随IP时区：开关、手动恢复、失败回退及出口变化检查通过")
             precondition(publicIPText(ip: nil, city: "City") == "IP异常")
             precondition(publicIPText(ip: "203.0.113.1", city: nil) == "城市未知·203.0.113.1")

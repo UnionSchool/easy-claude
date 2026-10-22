@@ -33,9 +33,12 @@ entry=r'''
   window.appearance = NSAppearance(named:.darkAqua)
   window.contentView = host
   func drain() { RunLoop.main.run(until:Date().addingTimeInterval(0.25)) }
+  for language in ["en", "zh"] {
+  owner.setLanguage(language)
+  precondition(AppLanguage.current.rawValue == language)
   for (mode,expanded) in [("ready",false),("ready",true),("waiting",false),("auth_required",false),("auth_expired",false),("failed",false),("unknown",false),("verifying",false)] {
    owner.snapshot = snapshot(mode)
-   owner.error = ["auth_required","auth_expired","failed"].contains(mode) ? "测试状态：请重新检测" : nil
+   owner.error = ["auth_required","auth_expired","failed"].contains(mode) ? L("测试状态：请重新检测", "Test query failed. Check again.") : nil
    owner.controlErrorCode = mode
    owner.controlsExpanded = expanded; owner.resizeControls()
    let size = NSSize(width:360,height:owner.controlHeight)
@@ -43,14 +46,51 @@ entry=r'''
    precondition(host.bounds.width == 360 && host.bounds.height == owner.controlHeight)
    let bitmap = host.bitmapImageRepForCachingDisplay(in:host.bounds)!
    host.cacheDisplay(in:host.bounds,to:bitmap)
-   let file = CommandLine.arguments[1]+"/"+mode+(expanded ? "-expanded" : "")+".png"
+   let file = CommandLine.arguments[1]+"/"+language+"-"+mode+(expanded ? "-expanded" : "")+".png"
    try bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:file))
    print("PASS control render",mode,expanded ? "expanded" : "collapsed")
   }
+  }
+  owner.setLanguage("zh")
   // 在测试Bundle的独立偏好域验证现有动作，不开启提醒、自动更新或真实登录项。
   owner.lastAttempt = Date(); owner.ipLastAttempt = Date()
   UserDefaults.standard.set(owner.appVersion,forKey:"updateCheckedVersion")
   UserDefaults.standard.set(Date().timeIntervalSince1970,forKey:"updateLastAttempt")
+  let preserved = UserDefaults.standard.dictionaryRepresentation().filter { $0.key != "interfaceLanguage" }
+  owner.setLanguage("en")
+  precondition(L("更多设置", "More settings") == "More settings")
+  precondition(cityLabel("洛杉矶") == "Los Angeles")
+  precondition(resetDescription(nil, weekly:true) == "Reset time unknown")
+  precondition(recoveryCountdown(now + 7200, now:now) == "2h")
+  precondition(controlState(snapshot:snapshot("ready"),error:nil,code:nil,weeklySelected:false,now:now).headline == "Just updated")
+  precondition(UserDefaults.standard.string(forKey:"interfaceLanguage") == "en")
+  owner.setLanguage("zh")
+  precondition(NSDictionary(dictionary:preserved).isEqual(to:UserDefaults.standard.dictionaryRepresentation().filter { $0.key != "interfaceLanguage" }))
+  for language in ["en", "zh"] {
+   owner.setLanguage(language)
+   if language == "en" {
+    for hour in [0, 6, 11, 12, 18, 21, 23] {
+     precondition(clockPeriod(at:Date(timeIntervalSince1970:Double(hour * 3600)),zone:TimeZone(secondsFromGMT:0)!) == (hour < 12 ? "AM" : "PM"))
+    }
+   }
+   let date = Date(timeIntervalSince1970: 10 * 3600 + 9 * 60)
+   let zone = TimeZone(secondsFromGMT:0)!
+   for width: CGFloat in [48, 96] {
+    let line = floatingClockText(at:date,zone:zone,width:width,baseSize:20,locale:Locale(identifier:"en_US"))
+    precondition(line.text.string == (language == "zh" ? "10:09 上午" : "10:09 AM"))
+    let large = line.text.attribute(.font,at:0,effectiveRange:nil) as! NSFont
+    let small = line.text.attribute(.font,at:line.text.length-1,effectiveRange:nil) as! NSFont
+    precondition(small.pointSize * 2 == large.pointSize && line.text.size().width <= width)
+    precondition(!floatingClockText(at:date,zone:zone,width:width,baseSize:20,locale:Locale(identifier:"en_GB")).text.string.contains("AM"))
+   }
+   let floating = ClockView(frame:NSRect(x:0,y:0,width:controlProduct == "Codex" ? 48 : 96,height:46))
+   floating.zone = TimeZone(identifier:"America/Los_Angeles")!;floating.cityName = "洛杉矶"
+   let bitmap = floating.bitmapImageRepForCachingDisplay(in:floating.bounds)!
+   floating.cacheDisplay(in:floating.bounds,to:bitmap)
+   try bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:CommandLine.arguments[1]+"/"+language+"-clock.png"))
+  }
+  owner.setLanguage("zh")
+  print("PASS language persistence, settings retention and half-size clock suffix")
   let oldClock = owner.clockEnabled
   owner.toggleClock()
   precondition(owner.clockEnabled != oldClock && UserDefaults.standard.bool(forKey:"clockEnabled") == owner.clockEnabled)
@@ -102,7 +142,7 @@ entry=r'''
 '''
 with tempfile.TemporaryDirectory(prefix=name+'-controls-') as temporary:
  work=Path(temporary);app=work/'Controls.app';contents=app/'Contents';binary=contents/'MacOS/controls';binary.parent.mkdir(parents=True)
- (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':domain,'CFBundleExecutable':'controls','CFBundlePackageType':'APPL','LSUIElement':True,'CFBundleShortVersionString':'1.0.1'}))
+ (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':domain,'CFBundleExecutable':'controls','CFBundlePackageType':'APPL','LSUIElement':True,'CFBundleShortVersionString':json.loads((root/'package.json').read_text())['version']}))
  source=work/'Controls.swift';source.write_text((root/'native/Overlay.swift').read_text().split('@main\nstruct Main')[0]+entry)
  try:
   compile_result=subprocess.run(['xcrun','swiftc','-swift-version','6','-parse-as-library','-module-cache-path',str(output/'swift-cache'),str(source),'-o',str(binary),'-framework','AppKit'],capture_output=True,text=True)

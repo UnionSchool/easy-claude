@@ -1,6 +1,6 @@
 {
   "name": "easy-claude",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Claude Code quota rings and transparent world clock for Claude desktop",
   "type": "module",
   "bin": {
@@ -10,6 +10,7 @@
     "bin",
     "src",
     "README.md",
+    "README.zh-CN.md",
     "native/Overlay.swift",
     "native/build/EasyClaudeOverlay.app",
     "scripts/build-overlay.mjs",
@@ -25,7 +26,8 @@
     "test:native": "python3 scripts/test-native-update.py",
     "test:lock": "python3 scripts/test-native-lock.py",
     "test:reminder": "python3 scripts/test-native-reminder.py",
-    "test:controls": "python3 scripts/test-controls.py"
+    "test:controls": "python3 scripts/test-controls.py",
+    "test:refresh": "python3 scripts/test-refresh.py"
   },
   "license": "MIT",
   "author": "UnionSchool",

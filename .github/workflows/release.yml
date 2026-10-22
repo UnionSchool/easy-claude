@@ -22,6 +22,7 @@ jobs:
       - run: npm test
       - run: npm run build:overlay
       - run: npm run test:controls
+      - run: npm run test:refresh
       - run: npm run test:lock
       - run: npm run test:native
       - run: npm run test:reminder

@@ -1,3 +1,4 @@
+import { L } from './language.js';
 import { readUsage } from './usage.js';
 import { overlayData, overlayError } from './overlay-data.js';
 const controller = new AbortController();
@@ -6,7 +7,7 @@ process.once('SIGINT', () => controller.abort());
 try {
   const text = JSON.stringify(overlayData(await readUsage({ signal: controller.signal })));
   // 原生端在进程结束后读取管道；限制体积以免写端等待管道空间。
-  if (Buffer.byteLength(text) > 12000) throw new Error('额度响应过大，请使用 easy-claude 查看完整数据。');
+  if (Buffer.byteLength(text) > 12000) throw new Error(L('额度响应过大，请使用 easy-claude 查看完整数据。', 'Usage response too large. Run easy-claude for full details.'));
   console.log(text);
 } catch (error) {
   console.log(JSON.stringify(overlayError(error)));

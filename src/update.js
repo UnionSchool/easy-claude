@@ -1,3 +1,4 @@
+import { L } from './language.js';
 import { access, realpath } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname, basename, join, delimiter } from 'node:path';
@@ -15,7 +16,7 @@ export function installedPrefix(root, platform = process.platform) {
 
 export function isNewer(latest, current) {
   if (!/^\d+\.\d+\.\d+$/.test(latest) || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(current)) {
-    throw new Error('无法识别正式版本号，未执行更新。');
+    throw new Error(L('无法识别正式版本号，未执行更新。', 'Invalid release version. Update not started.'));
   }
   const a = latest.split('.').map(Number), b = current.split('-')[0].split('.').map(Number);
   for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] > b[i]; }
@@ -31,7 +32,7 @@ async function findNpmCli() {
       catch { /* npm 可能位于 PATH 中另一套 Node 的旁边。 */ }
     }
   }
-  throw new Error('未找到 npm，请先安装 Node.js/npm，再使用 npm i -g 更新。');
+  throw new Error(L('未找到 npm，请先安装 Node.js/npm，再使用 npm i -g 更新。', 'npm not found. Install Node.js/npm, then update with npm i -g.'));
 }
 
 export async function readLatest(npmCli, name) {
@@ -39,16 +40,16 @@ export async function readLatest(npmCli, name) {
     const { stdout } = await promisify(execFile)(process.execPath, [npmCli, 'view', name, 'dist-tags.latest',
       '--json', '--prefer-online', '--registry=https://registry.npmjs.org'], { timeout: 30000, maxBuffer: 4096 });
     return JSON.parse(stdout);
-  } catch { throw new Error('无法在线检查 npm 最新版本，请检查网络后重试。'); }
+  } catch { throw new Error(L('无法在线检查 npm 最新版本，请检查网络后重试。', 'Cannot check the latest npm version. Check the network and retry.')); }
 }
 
 function runNpm(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: 'inherit', shell: false });
-    child.once('error', () => reject(new Error('无法启动 npm 更新。')));
+    child.once('error', () => reject(new Error(L('无法启动 npm 更新。', 'Cannot start npm update.'))));
     child.once('exit', (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`npm 更新失败（${signal ?? code ?? '未知状态'}），请检查网络或安装目录权限。`));
+      else reject(new Error(L(`npm 更新失败（${signal ?? code ?? '未知状态'}），请检查网络或安装目录权限。`, `npm update failed (${signal ?? code ?? 'unknown'}). Check network and installation permissions.`)));
     });
   });
 }
@@ -57,13 +58,13 @@ export async function updatePackage(name, { root = fileURLToPath(new URL('../', 
   getNpmCli = findNpmCli, getLatest = readLatest,
   currentVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
   run = runNpm, platform = process.platform } = {}) {
-  if (!['easy-codex', 'easy-claude'].includes(name)) throw new Error('不支持的更新包名。');
+  if (!['easy-codex', 'easy-claude'].includes(name)) throw new Error(L('不支持的更新包名。', 'Unsupported update package.'));
   const npmCli = await getNpmCli();
   const latest = await getLatest(npmCli, name);
   if (!isNewer(latest, currentVersion)) {
     console.log(currentVersion === latest
-      ? `${name} 已经是最新版本（${currentVersion}）。`
-      : `${name} 当前版本 ${currentVersion} 高于 npm 最新版本 ${latest}，无需更新。`);
+      ? L(`${name} 已经是最新版本（${currentVersion}）。`, `${name} is already up to date (${currentVersion}).`)
+      : L(`${name} 当前版本 ${currentVersion} 高于 npm 最新版本 ${latest}，无需更新。`, `${name} ${currentVersion} is newer than npm ${latest}; no update needed.`));
     return false;
   }
   const prefix = installedPrefix(root, platform);
@@ -71,13 +72,13 @@ export async function updatePackage(name, { root = fileURLToPath(new URL('../', 
   const args = [npmCli, 'install', '--global', ...(prefix ? ['--prefix', prefix] : []),
     '--prefer-online', '--registry=https://registry.npmjs.org', `${name}@${latest}`];
   await run(process.execPath, args);
-  console.log(`${name} 已更新到 ${latest}。`);
+  console.log(L(`${name} 已更新到 ${latest}。`, `${name} updated to ${latest}.`));
   return true;
 }
 
 export async function checkUpdate(name, { getNpmCli = findNpmCli, getLatest = readLatest,
   currentVersion = version } = {}) {
-  if (!['easy-codex', 'easy-claude'].includes(name)) throw new Error('不支持的更新包名。');
+  if (!['easy-codex', 'easy-claude'].includes(name)) throw new Error(L('不支持的更新包名。', 'Unsupported update package.'));
   const latest = await getLatest(await getNpmCli(), name);
   return { latest, available: isNewer(latest, currentVersion) };
 }
