@@ -27,7 +27,11 @@ jobs:
       - run: npm run test:native
       - run: npm run test:reminder
       - run: npm pack --dry-run
+      - name: Check already published version
+        id: published
+        run: node scripts/check-published.mjs
       - name: Publish to npm
+        if: steps.published.outputs.exists != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
