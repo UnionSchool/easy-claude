@@ -8,6 +8,7 @@ entry=r'''
  @MainActor static func main() throws {
   _ = NSApplication.shared
   let owner = Overlay()
+  owner.automaticUsageRefresh=false
   owner.node=CommandLine.arguments[1];owner.script=CommandLine.arguments[2]
   owner.searchPath=ProcessInfo.processInfo.environment["PATH"] ?? ""
   owner.ipLastAttempt=Date();owner.versionCheck=Process();owner.reminderSending=true
@@ -35,18 +36,36 @@ entry=r'''
    precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier == front)
   }
   check(299,due:false,shouldQuery:false)
+  check(301,due:false,shouldQuery:false)
+  check(59,due:true,shouldQuery:false)
+  check(61,due:true,shouldQuery:false)
+  check(59,due:false,shouldQuery:false,reminder:true)
+  check(61,due:false,shouldQuery:false,reminder:true)
+  check(86400,due:true,shouldQuery:false,reminder:true)
+  owner.automaticUsageRefresh=true
+  check(299,due:false,shouldQuery:false)
   check(301,due:false,shouldQuery:true)
   check(59,due:true,shouldQuery:false)
   check(61,due:true,shouldQuery:true)
   check(59,due:false,shouldQuery:false,reminder:true)
   check(61,due:false,shouldQuery:true,reminder:true)
+  owner.usageSchedule.nextAllowedAt=now+900
+  check(86400,due:true,shouldQuery:false)
+  owner.usageSchedule.nextAllowedAt=0
+  owner.automaticUsageRefresh=false
+  owner.reminder=nil
+  owner.refresh()
+  precondition(owner.query != nil,"手动刷新必须保留")
+  let manualDeadline=Date().addingTimeInterval(5)
+  while owner.query != nil && Date()<manualDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
+  precondition(owner.query == nil)
   owner.reminder=nil;owner.snapshot!.windows=[row]
   owner.snapshot!.fetchedAt=Date().timeIntervalSince1970-599
   owner.error=nil
   precondition(owner.currentControlState().mode == "ready")
   owner.snapshot!.fetchedAt=Date().timeIntervalSince1970-601
   precondition(owner.currentControlState().mode == "unknown")
-  print("PASS actual tick: normal 299/301s, reset/reminder 59/61s, stale 599/601s; no foreground change")
+  print("PASS actual tick: off never polls, on 300/60s, cooldown, manual refresh, stale 599/601s; no foreground change")
  }
 }
 '''

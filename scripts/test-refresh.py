@@ -45,7 +45,7 @@ entry = r'''
    }
    precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier == front)
   }
-  print("PASS 300-second schedule: 429 backoff 10/15m, cooldown gate, in-flight guard, success recovery; foreground app unchanged")
+  print("PASS manual usage refresh: 429 backoff 10/15m, cooldown gate, in-flight guard, success recovery; foreground app unchanged")
  }
 }
 '''

@@ -4,15 +4,26 @@
 
 A lightweight companion for Claude: read CLI account usage, show transparent usage rings and a world clock, and manage them from a native macOS menu bar panel. No model calls or changes to the official application.
 
-## v1.0.3 release notes
+## Exit IP protection (application proxy)
 
-- Refresh usage every five minutes; keep one-minute online confirmation when a reset or availability alert is due.
-- Keep usage valid between polls with a ten-minute stale-data threshold; errors and expired windows remain explicit.
-- HTTP 429 pauses queries for 10 minutes, then up to 15 minutes; success restores normal polling. Manual and reminder queries obey the same cooldown.
-- Keep the half-size AM/PM or Chinese day period beside the floating time, with the city below.
-- Verify background quota refresh with isolated continuous-typing and marked-text checks; do not activate the official application.
+Automatic usage refresh is off by default. Enable it for five-minute refreshes and one-minute confirmation after resets or due alerts; disable it for manual refresh only. Both modes obey rate-limit cooldowns. IP checks and the clock run independently.
 
-[Release history](CHANGELOG.md) · [1.0.3 development and verification](https://github.com/UnionSchool/easy-claude/blob/main/docs/版本/1.0.3开发管理.md)
+Claude Desktop and Claude Code can use the same fixed local proxy: **http://127.0.0.1:18197**. Desktop uses the official `egressProxyUrl` policy; terminal Code uses proxy variables in `~/.claude/settings.json`. Normal Dock, Spotlight and terminal startup stays unchanged. No outer sandbox or application patching is used: the earlier sandboxed desktop launcher conflicted with Chromium's own sandbox and was withdrawn.
+
+Enable Exit IP protection and enter the IPv4 allowlist. Only a successful current IP check permits forwarding. Service absent, protection off, unknown/expired/failed check or mismatched IP blocks proxy traffic and closes existing tunnels. Opening easy-claude starts the proxy even while the switch is off; the switch must be on and verification successful to forward. The Launch Claude button before Quit opens the official app normally, only when clicked.
+
+Configuration changes require manually reopening Claude; the tool does not restart it. This is application proxy control, not an OS firewall: native updates, external browsers and programs that ignore proxy settings are not fully covered. IPv4 HTTPS CONNECT on port 443 is supported; IPv6 and other target ports are refused by this proxy. Protection covers configured proxy connections and does not guarantee control of every Claude-related network request.
+
+[Setup, proxy configuration and removal](docs/exit-ip-protection.md) · [Development verification](docs/版本/出口IP保护开发管理.md)
+
+## v1.1.0 release notes
+
+- Add a fixed local proxy and IPv4 exit allowlist; invalid, expired or disabled checks block proxy connections.
+- Group Network & protection and synchronize the displayed exit with protection checks.
+- Add an automatic usage refresh switch, off by default, retaining manual refresh and HTTP 429 cooldowns.
+- Keep normal Launch Claude behavior and identify ipinfo.io as the time-zone lookup source.
+
+[Release history](CHANGELOG.md) · [1.1.0 development and release](docs/版本/1.1.0开发管理.md)
 
 ## Install and run
 
@@ -35,13 +46,13 @@ claude auth login
 
 CLI and desktop login are separate. This tool cannot verify that their accounts match. Missing or stale data is never treated as full or zero usage. API key balances and current conversation context are outside its scope.
 
-Usage refreshes every five minutes; due resets and availability alerts are confirmed once per minute. HTTP 429 pauses requests for 10 minutes, then up to 15 minutes. Manual refresh and alerts respect the same cooldown. A successful query restores the five-minute interval; query failures never imply availability.
+Automatic usage refresh is an explicit persistent switch, off by default (300 seconds normally, 60 seconds after resets or due alerts). HTTP 429 still pauses manual requests for 10 minutes, then up to 15 minutes. Successful queries clear the cooldown; failures never imply availability. The published v1.0.3 behavior is described in its release notes above.
 
 ## Usage rings and recovery
 
 The outer thick ring shows weekly usage; the inner thin ring shows the five-hour window. Only windows returned by the service are shown. The center defaults to the five-hour percentage, falling back to weekly; select a quota row to change it. The center has no percent sign. Green means more than 50% remains, orange 20–50%, and red less than 20%.
 
-Multiple exhausted windows wait for the latest reset among them. Reaching that time starts an online confirmation; it does not assume the account is available. Weekly countdowns use the largest remaining unit, while five-hour countdowns show hours and minutes. Absolute reset times use the system time zone and its 12/24-hour format.
+Multiple exhausted windows wait for the latest reset among them. Reaching that time waits for automatic confirmation if enabled, or a manual refresh if disabled; it does not assume the account is available. Weekly countdowns use the largest remaining unit, while five-hour countdowns show hours and minutes. Absolute reset times use the system time zone and its 12/24-hour format.
 
 ## Clock and time zones
 
@@ -104,3 +115,5 @@ A matching `v<version>` tag triggers GitHub Actions validation, universal build 
 CLI login can expire while the desktop remains signed in. Official service responses and network access determine availability. Notification sound, real logout/reboot and cross-machine multi-monitor behavior need separate acceptance; simulated UI tests do not prove those paths.
 
 [Version management](https://github.com/UnionSchool/easy-claude/blob/main/docs/版本/README.md)
+
+The Network & protection section groups the current exit, allowlist and protection status. With protection on, the displayed exit follows the protection check immediately; failures show unknown instead of an old IP. Expand More settings to edit the allowlist and interval.

@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.1.0
+
+- Use a fixed local proxy for normal Claude startup; withdraw the outer desktop sandbox after nested-sandbox helper crashes. Fail closed when the switch is off or IP verification is invalid. Official proxy coverage exceptions remain documented.
+
+- Add the exit IP protection switch, local gateway and protected Claude Code launch entry (development; real Claude acceptance pending).
+- Add Launch Claude immediately before Quit; never close an existing desktop automatically.
+- Add a persistent automatic usage refresh switch, off by default; retain manual refresh and HTTP 429 cooldowns.
+- Group Network & protection; synchronize the displayed exit with protection checks and hide stale IPs on failure. Collapse configuration into More settings.
+
 ## 1.0.3
 
 - Refresh usage every five minutes; keep one-minute online confirmation when a reset or availability alert is due.

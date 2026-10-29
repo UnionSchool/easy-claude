@@ -3,6 +3,7 @@ import SwiftUI
 import CoreGraphics
 import Darwin
 import UserNotifications
+import Network
 
 // 语言与地区/小时制独立：只保存用户选择，不改系统设置。
 enum AppLanguage: String, CaseIterable {
@@ -150,7 +151,7 @@ struct UsageRefreshSchedule {
     mutating func receive(rateLimited: Bool, succeeded: Bool, now: Double) {
         if rateLimited {
             rateLimitCount = min(rateLimitCount + 1, 2)
-            nextAllowedAt = now + min(900, usageRefreshInterval * pow(2, Double(rateLimitCount)))
+            nextAllowedAt = now + min(900, usageRateLimitBase * pow(2, Double(rateLimitCount)))
         } else if succeeded {
             rateLimitCount = 0
             nextAllowedAt = 0
@@ -521,8 +522,8 @@ enum LoginStartup {
 let controlProduct = "Claude"
 let controlLoginName = "Claude Code"
 let controlLoginCommand = "claude auth login"
-let usageRefreshInterval: TimeInterval = 300
-let controlStaleSeconds: Double = usageRefreshInterval * 2
+let usageRateLimitBase: TimeInterval = 300
+let controlStaleSeconds: Double = 600
 func controlQuotas(_ windows: [UsageWindow]) -> [ControlQuota] { return [windows.first { $0.id == "five_hour:primary" }.map { ControlQuota(window: $0, weekly: false) }, windows.first { $0.id == "seven_day:primary" }.map { ControlQuota(window: $0, weekly: true) }].compactMap { $0 } }
 
 struct ControlQuota: Identifiable {
@@ -554,7 +555,7 @@ func controlState(snapshot: Snapshot?, error: String?, code: String?, weeklySele
         let title = code == "auth_required" ? L("未登录", "Not signed in") : code == "auth_expired" ? L("登录已过期", "Login expired") : L("查询失败", "Query failed")
         return ControlState(mode: auth ? code! : "failed", text: title, headline: title, detail: displayMessage(error), quotas: [])
     }
-    guard let snapshot else { return ControlState(mode: "loading", text: "—", headline: L("正在读取", "Loading"), detail: L("正在查询本机CLI账号额度", "Reading local CLI account usage"), quotas: []) }
+    guard let snapshot else { return ControlState(mode: "unknown", text: "—", headline: L("尚未读取额度", "Usage not loaded"), detail: L("点击刷新额度，或开启额度自动刷新。", "Refresh usage or enable automatic usage refresh."), quotas: []) }
     guard now - snapshot.fetchedAt <= controlStaleSeconds, snapshot.fetchedAt <= now + 5,
           !rows.isEmpty, rows.allSatisfy({ row in
               guard let remaining = row.window.remaining, remaining.isFinite, (0...100).contains(remaining) else { return false }
@@ -651,6 +652,8 @@ struct ControlPanelView: View {
                         }
                     }
                     Divider()
+                    setting(L("额度自动刷新", "Automatic usage refresh"), value: owner.automaticUsageRefresh) { owner.toggleAutomaticUsageRefresh() }
+                    Divider()
                     HStack(spacing: 7) {
                         Image(systemName: "clock").foregroundStyle(.secondary)
                         let clockParts = floatingClockLines(at: Date(), zone: owner.clock.zone)
@@ -663,15 +666,7 @@ struct ControlPanelView: View {
                         Text(cityLabel(owner.clock.cityName)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                     }.accessibilityElement(children: .combine)
                     Divider()
-                    HStack(alignment: .center, spacing: 9) {
-                        Image(systemName: "network").foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L("网络出口", "Network exit")).font(.system(size: 12, weight: .medium))
-                            Text(displayMessage(owner.ipText)).font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.7)
-                        }
-                        Spacer(minLength: 3)
-                        iconButton(L("刷新公网IP", "Refresh public IP"), "arrow.clockwise") { owner.refreshIP() }.disabled(owner.ipQuery != nil)
-                    }
+                    protection
                     if owner.controlsExpanded { settings }
                 }.padding(16)
             }.scrollIndicators(.hidden)
@@ -682,6 +677,8 @@ struct ControlPanelView: View {
                 }
                 .buttonStyle(.plain).accessibilityIdentifier("moreSettings")
                 Spacer()
+                Button { owner.launchClaudeApp() } label: { Label(L("启动 Claude", "Launch Claude"), systemImage: "play") }
+                    .buttonStyle(.plain).accessibilityIdentifier("launchClaudeApp")
                 Divider().frame(height: 17)
                 Button { owner.quit() } label: { Label(L("退出", "Quit"), systemImage: "power") }.buttonStyle(.plain)
             }.font(.system(size: 12)).padding(.horizontal, 16).padding(.vertical, 12)
@@ -694,6 +691,62 @@ struct ControlPanelView: View {
     func iconButton(_ label: String, _ image: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: image).frame(width: 20, height: 20) }
             .buttonStyle(.plain).help(label).accessibilityLabel(label)
+    }
+    var protection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(L("网络与保护", "Network & protection"), systemImage: "shield")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Toggle(L("出口 IP 保护", "Exit IP protection"), isOn: Binding(
+                    get: { owner.protectionEnabled }, set: { owner.setProtectionEnabled($0) }))
+                    .toggleStyle(.switch).tint(.green).controlSize(.mini).font(.system(size: 10))
+                    .accessibilityIdentifier("ipProtectionToggle")
+            }
+            Label(owner.protectionStateText, systemImage: "circle.fill")
+                .font(.system(size: 10)).foregroundStyle(owner.protectionIsAllowed ? .green : (owner.protectionEnabled ? .orange : .secondary))
+            networkRow(L("当前出口", "Current exit"), owner.networkIPText)
+            networkRow(L("允许出口", "Allowed exits"), owner.allowedIPSummary)
+            HStack {
+                Text(owner.protectionCheckedText).font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer()
+                Button(L("重新检测", "Check again")) { owner.refreshNetworkIP() }
+                    .controlSize(.small).disabled(owner.protectionEnabled ? owner.protectionReport?.state == "checking" : owner.ipQuery != nil)
+            }
+            if owner.protectionEnabled, let reason = owner.protectionReport?.reason, !reason.isEmpty {
+                Text(AppLanguage.current == .zh ? reason : "Access is blocked until a current IP check matches the allowlist.")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if owner.controlsExpanded {
+                Divider()
+                Text(L("保护设置", "Protection settings")).font(.system(size: 11, weight: .semibold))
+                TextField(L("允许的 IPv4，逗号分隔", "Allowed IPv4 addresses, comma-separated"), text: $owner.protectionIPs)
+                    .textFieldStyle(.roundedBorder).font(.system(size: 11))
+                    .onChange(of: owner.protectionIPs) { _, _ in owner.protectionConfigurationChanged() }
+                    .accessibilityIdentifier("ipProtectionAddresses")
+                HStack {
+                    Text(L("复查间隔", "Check interval"))
+                    Spacer()
+                    Picker("", selection: $owner.protectionInterval) {
+                        ForEach([30, 60, 120, 300], id: \.self) { value in Text("\(value)s").tag(value) }
+                    }.labelsHidden().frame(width: 85)
+                        .onChange(of: owner.protectionInterval) { _, _ in owner.protectionConfigurationChanged() }
+                }.font(.system(size: 11)).controlSize(.small)
+                networkRow(L("本机代理", "Local proxy"), "127.0.0.1:18197")
+                Text(L("关闭保护或退出工具，Claude 将无法联网。", "Turning off protection or quitting blocks Claude's proxy connections."))
+                    .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let error = owner.protectionError {
+                Text(error).font(.system(size: 10)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+    func networkRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label).font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 66, alignment: .leading)
+            Text(value).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+        }
     }
     func quota(_ row: ControlQuota) -> some View {
         let valid = state.mode == "ready" || state.mode == "waiting"
@@ -733,19 +786,9 @@ struct ControlPanelView: View {
     }
     var settings: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(L("语言", "Language")).font(.system(size: 12))
-                Spacer()
-                Picker(L("语言", "Language"), selection: Binding(get: { UserDefaults.standard.string(forKey: "interfaceLanguage") ?? "system" }, set: { owner.setLanguage($0) })) {
-                    Text(L("跟随系统", "System default")).tag("system")
-                    Text("简体中文").tag("zh")
-                    Text("English").tag("en")
-                }.labelsHidden().frame(width: 155).accessibilityIdentifier("interfaceLanguage")
-            }
-            Divider()
             Text(L("浮窗与时间", "Overlay & time")).font(.system(size: 10)).foregroundStyle(.secondary)
             setting(L("显示时间", "Show time"), value: owner.clockEnabled) { owner.toggleClock() }
-            setting(L("跟随IP时区", "Follow IP time zone"), value: owner.followIPTimeZone) { owner.toggleFollowIPTimeZone() }
+            setting(L("跟随IP时区:ipinfo.io", "Follow IP time zone: ipinfo.io"), value: owner.followIPTimeZone) { owner.toggleFollowIPTimeZone() }
             if owner.followIPTimeZone && owner.ipClock.zone == nil {
                 Text(L("IP时区不可用，暂用自定义时间", "IP time zone unavailable; using manual time")).font(.system(size: 10)).foregroundStyle(.secondary)
             }
@@ -777,7 +820,17 @@ struct ControlPanelView: View {
             if let reminder = owner.reminder { Text(L("等待恢复：", "Waiting: ") + recoveryCountdown(reminder.due, now: Date().timeIntervalSince1970)).font(.system(size: 10)).foregroundStyle(.secondary) }
             setting(L("开机启动", "Launch at login"), value: LoginStartup.enabled()) { owner.toggleLoginStartup() }
             Divider()
-            Text(L("版本与更新", "Version & updates")).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(L("通用与更新", "General & updates")).font(.system(size: 10)).foregroundStyle(.secondary)
+            HStack {
+                Text(L("语言", "Language")).font(.system(size: 12))
+                Spacer()
+                Picker(L("语言", "Language"), selection: Binding(get: { UserDefaults.standard.string(forKey: "interfaceLanguage") ?? "system" }, set: { owner.setLanguage($0) })) {
+                    Text(L("跟随系统", "System default")).tag("system")
+                    Text("简体中文").tag("zh")
+                    Text("English").tag("en")
+                }.labelsHidden().frame(width: 155).accessibilityIdentifier("interfaceLanguage")
+            }
+
             setting(L("自动更新", "Automatic updates"), value: UserDefaults.standard.bool(forKey: "automaticUpdatesEnabled")) { owner.toggleAutomaticUpdates() }
             HStack {
                 Text("v\(owner.appVersion)").font(.system(size: 11))
@@ -792,6 +845,61 @@ struct ControlPanelView: View {
 
 @MainActor
 final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate, ObservableObject {
+    struct ProtectionReport: Decodable {
+        var state: String
+        var reason: String?
+        var ip: String?
+        var checkedAt: String?
+        var ready: Bool?
+    }
+    @Published var automaticUsageRefresh = UserDefaults.standard.bool(forKey: "automaticUsageRefresh")
+    var protectionIsAllowed: Bool { protectionEnabled && protectionError == nil && protectionReport?.ready == true && protectionReport?.state == "allowed" }
+    var networkIPText: String {
+        guard protectionEnabled else { return displayMessage(ipText) }
+        guard protectionError == nil, let report = protectionReport else { return L("IP 未知", "IP unknown") }
+        // 保护检测是地址展示的唯一来源，独立地理查询不能覆盖它。
+        if let ip = report.ip, report.state == "allowed" || (report.state == "blocked" && report.reason == "出口不在白名单") { return ip }
+        return report.state == "checking" ? L("正在检测…", "Checking…") : L("IP 未知", "IP unknown")
+    }
+    var allowedIPSummary: String {
+        let values = protectionIPs.components(separatedBy: CharacterSet(charactersIn: ",，\n ")).filter { !$0.isEmpty }
+        return values.isEmpty ? L("尚未设置", "Not configured") : values.joined(separator: ", ")
+    }
+    var protectionCheckedText: String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard protectionEnabled, let raw = protectionReport?.checkedAt,
+              let date = parser.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) else {
+            return L("最近检测：—", "Last check: —")
+        }
+        let formatter = DateFormatter(); formatter.timeStyle = .medium
+        return L("最近检测：", "Last check: ") + formatter.string(from: date)
+    }
+    @Published var protectionEnabled = UserDefaults.standard.bool(forKey: "ipProtectionEnabled")
+    @Published var protectionIPs = UserDefaults.standard.string(forKey: "ipProtectionAddresses") ?? ""
+    @Published var protectionInterval = UserDefaults.standard.object(forKey: "ipProtectionInterval") as? Int ?? 60
+    @Published var protectionReport: ProtectionReport?
+    @Published var protectionError: String?
+    var protectionProcess: Process?
+    var protectionInput: FileHandle?
+    var protectionOutput: FileHandle?
+    var protectionBuffer = Data()
+    var protectionEditTimer: Timer?
+    var protectionHeartbeat: TimeInterval = 0
+    let protectionPathMonitor = NWPathMonitor()
+    var protectionStateText: String {
+        if let protectionError { return L("未受保护：", "Unprotected: ") + protectionError }
+        if !protectionEnabled {
+            return protectionProcess != nil && protectionReport?.state != "off" ? L("正在阻断代理…", "Blocking proxy…") : L("保护已关闭 · 代理已阻断", "Protection off · proxy blocked")
+        }
+        switch protectionReport?.state {
+        case "allowed": return L("代理已放通 · 出口 IP 符合白名单", "Proxy allowed · exit IP matches the allowlist")
+        case "checking": return L("验证中 · 代理已阻断", "Verifying · proxy blocked")
+        case "blocked": return L("代理已阻断 · 等待有效 IP 验证", "Proxy blocked · waiting for valid IP verification")
+        case "fault": return L("保护故障 · 未受保护", "Protection fault · unprotected")
+        default: return L("未受保护 · 正在建立保护服务", "Unprotected · starting protection service")
+        }
+    }
     let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 32, height: 32),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     let ring = RingView(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
@@ -812,7 +920,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var controlHeight: CGFloat {
         let state = currentControlState()
         let quotaHeight: CGFloat = state.login ? 155 : CGFloat(max(1, state.quotas.count)) * 62 + (state.mode == "ready" ? 0 : 65)
-        let total: CGFloat = (controlsExpanded ? 198 : 174) + quotaHeight + (controlsExpanded ? (followIPTimeZone ? 355 : 420) : 0)
+        let total = quotaHeight + 310 + (controlsExpanded ? (followIPTimeZone ? 395 : 460) : 0)
         return min(total, max(280, (status?.button?.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 900) - 65))
     }
     var status: NSStatusItem?
@@ -912,13 +1020,117 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         controlPopover.contentViewController = NSHostingController(rootView: ControlPanelView(owner: self))
         timer = Timer.scheduledTimer(timeInterval: 0.4, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(hide), name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(protectionNetworkChanged), name: NSWorkspace.didWakeNotification, object: nil)
+        protectionPathMonitor.pathUpdateHandler = { [weak self] _ in
+            Task { @MainActor in self?.protectionNetworkChanged() }
+        }
+        protectionPathMonitor.start(queue: DispatchQueue(label: "easy-claude.network"))
+        startProtectionService()
         tick()
+    }
+    func setProtectionEnabled(_ enabled: Bool) {
+        if enabled && protectionIPs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            protectionError = L("请先在更多设置中输入允许的 IPv4。", "Enter an allowed IPv4 address in More settings first.")
+            resizeControls(); return
+        }
+        protectionEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "ipProtectionEnabled")
+        protectionError = nil
+        if enabled && protectionProcess == nil { startProtectionService() }
+        else if protectionProcess != nil { configureProtection() }
+        resizeControls()
+    }
+    func protectionConfigurationChanged() {
+        UserDefaults.standard.set(protectionIPs, forKey: "ipProtectionAddresses")
+        UserDefaults.standard.set(protectionInterval, forKey: "ipProtectionInterval")
+        guard protectionEnabled else { return }
+        sendProtection(["action": "hold"])
+        protectionEditTimer?.invalidate()
+        protectionEditTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.configureProtection() }
+        }
+    }
+    func configureProtection() {
+        let ips = protectionIPs.components(separatedBy: CharacterSet(charactersIn: ",，\n "))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        sendProtection(["action": "configure", "enabled": protectionEnabled, "ips": ips, "interval": protectionInterval])
+    }
+    func sendProtection(_ command: [String: Any]) {
+        guard let input = protectionInput, protectionProcess?.isRunning == true else { return }
+        do {
+            var data = try JSONSerialization.data(withJSONObject: command); data.append(10)
+            try input.write(contentsOf: data)
+        } catch { protectionError = L("保护控制通信失败。", "Protection control connection failed."); protectionProcess?.terminate() }
+    }
+    @objc func protectionNetworkChanged() {
+        if protectionEnabled { sendProtection(["action": "invalidate"]) }
+        ipQuery?.terminate(); ipQuery = nil
+        ipText = L("正在获取IP…", "Fetching IP…")
+        receiveIPTimeZone(nil)
+        refreshIP()
+    }
+    func startProtectionService() {
+        guard protectionProcess == nil else { return }
+        let process = Process(), input = Pipe(), output = Pipe()
+        process.executableURL = URL(fileURLWithPath: node)
+        process.arguments = [URL(fileURLWithPath: script).deletingLastPathComponent().appendingPathComponent("overlay-guard.js").path]
+        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+        var env = ProcessInfo.processInfo.environment; env["PATH"] = searchPath
+        process.environment = env
+        protectionBuffer.removeAll(); protectionReport = nil; protectionError = nil
+        protectionInput = input.fileHandleForWriting; protectionOutput = output.fileHandleForReading
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            Task { @MainActor in
+                guard let self, self.protectionProcess === process else { return }
+                self.protectionBuffer.append(data)
+                if self.protectionBuffer.count > 16384 {
+                    self.protectionError = L("保护服务响应无效。", "Invalid protection service response."); process.terminate(); return
+                }
+                while let end = self.protectionBuffer.firstIndex(of: 10) {
+                    let line = self.protectionBuffer.prefix(upTo: end)
+                    self.protectionBuffer.removeSubrange(...end)
+                    do {
+                        self.protectionReport = try JSONDecoder().decode(ProtectionReport.self, from: line)
+                        if self.protectionReport?.state == "fault" {
+                            self.protectionError = AppLanguage.current == .zh ? self.protectionReport?.reason : "Protection failed. Check the allowlist, sandbox and service."
+                        } else { self.protectionError = nil }
+                    } catch { self.protectionError = L("保护服务响应无效。", "Invalid protection service response."); process.terminate() }
+                    self.resizeControls()
+                }
+            }
+        }
+        process.terminationHandler = { [weak self] process in
+            Task { @MainActor in
+                guard let self, self.protectionProcess === process else { return }
+                self.protectionOutput?.readabilityHandler = nil
+                try? self.protectionInput?.close(); try? self.protectionOutput?.close()
+                self.protectionInput = nil; self.protectionOutput = nil; self.protectionProcess = nil
+                self.protectionReport = nil
+                if self.protectionEnabled { self.protectionError = L("保护服务已退出，受保护连接不可用。", "Protection service stopped; protected connections are unavailable.") }
+                self.resizeControls()
+            }
+        }
+        protectionProcess = process
+        do { try process.run(); configureProtection(); protectionHeartbeat = ProcessInfo.processInfo.systemUptime }
+        catch {
+            output.fileHandleForReading.readabilityHandler = nil
+            try? protectionInput?.close(); try? protectionOutput?.close()
+            protectionInput = nil; protectionOutput = nil; protectionProcess = nil
+            protectionError = L("无法启动保护服务。", "Cannot start protection service.")
+        }
+    }
+    @objc func launchClaudeApp() {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.anthropic.claudefordesktop") else {
+            protectionError = L("未找到 Claude App。", "Claude App was not found."); resizeControls(); return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
     func currentControlState(now: Double = Date().timeIntervalSince1970) -> ControlState {
         if !usageSchedule.allows(now) {
             let remaining = recoveryCountdown(usageSchedule.nextAllowedAt, now: now)
             return ControlState(mode: "rate_limited", text: L("限流", "Rate limited"), headline: L("请求过于频繁", "Too many requests"),
-                detail: L("服务限流，\(remaining)后自动重试；手动刷新也会等待。", "Rate limited. Retrying in \(remaining); manual refresh also waits."), quotas: [])
+                detail: L("服务限流，\(remaining)后可手动重试。", "Rate limited. Refresh manually after \(remaining)."), quotas: [])
         }
         return controlState(snapshot: snapshot, error: error, code: controlErrorCode, weeklySelected: ring.showWeeklyPercentage, now: now)
     }
@@ -961,12 +1173,17 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     @objc func hide() { panel.orderOut(nil); clockPanel.orderOut(nil) }
     @objc func tick() {
+        if protectionProcess?.isRunning == true && ProcessInfo.processInfo.systemUptime - protectionHeartbeat >= 5 {
+            sendProtection(["action": "heartbeat"]); protectionHeartbeat = ProcessInfo.processInfo.systemUptime
+        }
         checkVersionIfNeeded()
         if Date().timeIntervalSince(ipLastAttempt) >= 300 { refreshIP() }
-        let now = Date()
-        let resetDue = snapshot?.windows.contains { $0.resetsAt.map { $0 <= now.timeIntervalSince1970 } ?? false } ?? false
-        let reminderDue = reminder.map { $0.due <= now.timeIntervalSince1970 } ?? false
-        if now.timeIntervalSince(lastAttempt) >= (resetDue || reminderDue ? 60 : usageRefreshInterval) { refresh() }
+        if automaticUsageRefresh {
+            let now = Date().timeIntervalSince1970
+            let resetDue = snapshot?.windows.contains { $0.resetsAt.map { $0 <= now } ?? false } ?? false
+            let reminderDue = reminder.map { $0.due <= now } ?? false
+            if Date().timeIntervalSince(lastAttempt) >= (resetDue || reminderDue ? 60 : 300) { refresh() }
+        }
         refreshControls()
         guard let rect = targetWindow() else { hide(); lastRect = nil; return }
         lastRect = rect
@@ -1008,6 +1225,16 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         ring.toolTip = "Claude CLI\n" + summary + "\n" + currentControlState().headline
         ring.setAccessibilityLabel("Claude \(summary)")
         ring.needsDisplay = true
+    }
+    @objc func toggleAutomaticUsageRefresh() {
+        automaticUsageRefresh.toggle()
+        UserDefaults.standard.set(automaticUsageRefresh, forKey: "automaticUsageRefresh")
+        if automaticUsageRefresh { refresh() }
+    }
+    @objc func refreshNetworkIPMenu() { refreshNetworkIP() }
+    func refreshNetworkIP() {
+        if protectionEnabled { sendProtection(["action": "verify"]) }
+        else { refreshIP() }
     }
     @objc func refresh() {
         guard query == nil, usageSchedule.allows(Date().timeIntervalSince1970) else { return }
@@ -1082,6 +1309,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             let city = process.terminationStatus == 0 ? value?.city : nil
             Task { @MainActor in
                 guard let self else { return }
+                guard self.ipQuery === process else { return }
                 self.ipQuery = nil; self.ipText = text
                 self.receiveIPTimeZone(timezone, city: city)
             }
@@ -1172,7 +1400,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         menu.addItem(item(lastRect == nil ? L("等待 Claude 前台窗口", "Waiting for Claude foreground window") : L("拖动圆环可调整位置", "Drag the ring to reposition"), nil))
         if let error { menu.addItem(item(error, nil)) }
         if snapshot?.restricted == true { menu.addItem(item(L("服务端提示：当前使用受限", "Server reports restricted usage"), nil)) }
-        let address = item(ipText, ipQuery == nil ? #selector(refreshIP) : nil)
+        let address = item(networkIPText, #selector(refreshNetworkIPMenu))
         address.toolTip = L("点击刷新公网IP；城市为网络出口位置", "Click to refresh public IP; city is the network exit location")
         menu.addItem(address)
         menu.addItem(.separator())
@@ -1186,6 +1414,9 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             menu.addItem(option)
         }
         menu.addItem(item(query == nil ? L("立即刷新", "Refresh now") : L("正在刷新…", "Refreshing…"), query == nil ? #selector(refresh) : nil))
+        let automaticUsage = item(L("额度自动刷新", "Automatic usage refresh"), #selector(toggleAutomaticUsageRefresh))
+        automaticUsage.state = automaticUsageRefresh ? .on : .off
+        menu.addItem(automaticUsage)
         let alarm = item(L("额度可用提醒", "Usage available alert"), reminderAuthorizing ? nil : #selector(toggleReminder))
         alarm.state = reminder == nil ? .off : .on
         menu.addItem(alarm)
@@ -1198,7 +1429,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         let toggle = item(L("显示时间", "Show time"), #selector(toggleClock))
         toggle.state = clockEnabled ? .on : .off
         menu.addItem(toggle)
-        let follow = item(L("跟随IP时区", "Follow IP time zone"), #selector(toggleFollowIPTimeZone))
+        let follow = item(L("跟随IP时区:ipinfo.io", "Follow IP time zone: ipinfo.io"), #selector(toggleFollowIPTimeZone))
         follow.state = followIPTimeZone ? .on : .off
         menu.addItem(follow)
         if followIPTimeZone && ipClock.zone == nil {
@@ -1442,6 +1673,9 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) {
+        protectionEditTimer?.invalidate(); protectionPathMonitor.cancel()
+        protectionOutput?.readabilityHandler = nil
+        try? protectionInput?.close()
         ipQuery?.terminate()
         timer?.invalidate()
         query?.terminate()
@@ -1473,7 +1707,7 @@ func runControlChecks() {
     func state(_ snapshot: Snapshot?, error: String? = nil, code: String? = nil, weekly: Bool = false) -> ControlState {
         controlState(snapshot: snapshot, error: error, code: code, weeklySelected: weekly, now: now)
     }
-    precondition(state(nil).mode == "loading")
+    precondition(state(nil).mode == "unknown")
     precondition(state(sample()).text == "94%")
     precondition(state(sample(), weekly: true).text == "77%")
     var onlyWeek = sample(); onlyWeek.windows = controlQuotas(onlyWeek.windows).filter { $0.weekly }.map { $0.window }

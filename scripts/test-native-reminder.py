@@ -1,5 +1,6 @@
 """隔离提醒回归：不请求通知权限、不读取账号，不发送实际提醒。"""
 import json
+from itertools import product as combinations
 import os
 from pathlib import Path
 import plistlib
@@ -16,9 +17,9 @@ source = root / 'native/build' / (app_name + '.app')
 ids = ['codex:primary', 'codex:secondary'] if product == 'codex' else ['five_hour:primary', 'seven_day:primary']
 with tempfile.TemporaryDirectory(prefix='easy-reminder-test-') as temporary:
     folder = Path(temporary)
-    for label in ['early', 'restricted', 'missing', 'unknown', 'blocked-again', 'offline', 'permission-missing']:
+    for label, automatic_usage in combinations(['early', 'restricted', 'missing', 'unknown', 'blocked-again', 'offline', 'permission-missing'], [False, True]):
         domain = 'com.unionschool.reminder-test-' + uuid.uuid4().hex
-        work = folder / label
+        work = folder / (label + ('-auto' if automatic_usage else '-manual'))
         work.mkdir()
         (work / 'overlay-ip.js').write_text('console.log(JSON.stringify({ip:"203.0.113.1",city:"Test City"}));')
         app = work / 'Test.app'
@@ -32,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='easy-reminder-test-') as temporary:
         due = now + 3600 if label == 'early' else now - 5
         reminder = {'ids': ids, 'due': due}
         preferences = work / 'prefs.plist'
-        preferences.write_bytes(plistlib.dumps({'availabilityReminder': json.dumps(reminder).encode()}))
+        preferences.write_bytes(plistlib.dumps({'availabilityReminder': json.dumps(reminder).encode(), 'automaticUsageRefresh': automatic_usage}))
         subprocess.run(['defaults', 'import', domain, str(preferences)], check=True, capture_output=True)
         windows = [{'id': id, 'label': id, 'name': id, 'remaining': 100, 'resetsAt': now + 7200,
                     'windowDurationMins': minutes} for id, minutes in zip(ids, [300, 10080])]
@@ -51,14 +52,18 @@ with tempfile.TemporaryDirectory(prefix='easy-reminder-test-') as temporary:
             for restart in range(2):
                 process = subprocess.Popen([str(app / 'Contents/MacOS' / app_name), shutil.which('node'),
                     str(work / 'overlay-query.cjs'), os.environ['PATH'], ''], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                deadline = time.monotonic() + 10
+                deadline = time.monotonic() + (10 if automatic_usage else 2)
                 while time.monotonic() < deadline:
                     assert process.poll() is None, (process.returncode, process.communicate())
-                    if (work / 'queries').exists() and (work / 'queries').read_text().count('query') > restart:
-                        break
+                    if automatic_usage:
+                        if (work / 'queries').exists() and (work / 'queries').read_text().count('query') > restart:
+                            break
+                    else:
+                        assert not (work / 'queries').exists(), '关闭自动刷新时提醒不能主动查询'
                     time.sleep(.1)
-                else: raise AssertionError('开启提醒后未在后台查询')
-                time.sleep(1)
+                if automatic_usage:
+                    assert (work / 'queries').exists() and (work / 'queries').read_text().count('query') > restart, '开启自动刷新后应查询'
+                    time.sleep(1)
                 process.terminate()
                 process.wait(timeout=5)
                 process.stderr.close()
@@ -66,9 +71,9 @@ with tempfile.TemporaryDirectory(prefix='easy-reminder-test-') as temporary:
                 prefs = plistlib.loads(subprocess.check_output(['defaults', 'export', domain, '-']))
                 saved = json.loads(prefs['availabilityReminder'])
                 assert saved['ids'] == ids
-                expected = now + 7200 if label == 'blocked-again' else due
+                expected = now + 7200 if automatic_usage and label == 'blocked-again' else due
                 assert abs(saved['due'] - expected) < .01, (label, saved)
-            print('PASS', product, label, '后台查询、未误提醒、跨重启保留', flush=True)
+            print('PASS', product, label, '自动' if automatic_usage else '手动', '查询策略、未误提醒、跨重启保留', flush=True)
         finally:
             if process is not None:
                 process.kill()
