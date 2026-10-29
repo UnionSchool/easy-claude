@@ -11,7 +11,7 @@
 
 | 项目 | 已核实状态 |
 | --- | --- |
-| package.json / 本地原生构建 | 1.0.3 / 1.0.3 |
+| package.json / 本地原生构建 | 1.1.0（待发布） / 1.0.3开发版 |
 | GitHub标签 / Release | v1.0.3 / 已公开 |
 | npm Deployment | success |
 | npm公开registry | 1.0.3，gitHead与代码标签一致 |
