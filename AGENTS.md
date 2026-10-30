@@ -51,8 +51,8 @@
 
 ## 公网IP菜单
 
-- public-ip.js每轮仅请求一次https://ipinfo.io/json，同一响应读取IP、城市、时区；Node net.isIP校验IPv4/IPv6，城市仅接受受限文本；查询失败显示IP异常，城市未知保留IP。curl启用TLS校验、不跟随重定向，单请求12秒/8KiB上限，环境代理优先，其次系统HTTPS代理，不发送账号凭据。
-- native的IP查询独立于额度与前台窗口，启动及每300秒刷新，点击菜单立即刷新，失败不保留旧IP作为当前值。仅内存展示，不写UserDefaults或历史日志；退出终止查询。
+- public-ip.js以https://ipinfo.io/json为主源，失败仅尝试一次https://api.ipify.org?format=json；主源同一响应读取IP、城市、时区，备用仅IP且城市/时区未知；Node net.isIP校验IPv4/IPv6，城市仅接受受限文本；查询失败显示IP异常，城市未知保留IP。curl启用TLS校验、不跟随重定向，单请求12秒/8KiB上限，环境代理优先，其次系统HTTPS代理，不发送账号凭据。
+- native的IP查询独立于额度与前台窗口，启动及每300秒刷新，手动/网络触发同样遵守单调时钟至少60秒间隔，失败不保留旧IP作为当前值。仅内存展示，不写UserDefaults或历史日志；退出终止查询。
 
 - IP地理接口同一响应读取有效IP、城市与timezone；时区经Intl.DateTimeFormat校验，无效或缺失仅标为时区未知，不回退电脑时区；是否用于时钟由显式跟随开关决定，手动时区配置始终保留。
 
@@ -71,7 +71,7 @@
 - ControlState统一状态栏与面板：有效额度显示所选窗口百分比；任一已知总窗口耗尽取耗尽窗口较晚重置；到期确认中；缺失/过期/错误不显示旧数字。额度自动刷新默认关闭，以automaticUsageRefresh持久化；开启正常300秒、重置或提醒到点60秒，关闭仅手动，查询不重叠。
 - Snapshot新增可选errorCode，仅接受auth_required/auth_expired；普通错误为query_failed。Codex先account/read确认空账号后才判未登录，明确协议认证过期码才判过期；Claude缺凭据/过期/401明确分类，403不得当作未登录。复制命令不自动运行，不读取或转发额外认证数据。
 - npm run test:controls在隔离测试Bundle偏好域内编译实际ControlPanelView并绘制八类状态，生成native/build/control-previews（不进入npm包）；覆盖已有设置动作及实际按钮操作。CI与发布工作流必须执行；测试失败不得跳过或削弱。
-- 本版管理文件docs/版本/1.1.0开发管理.md持续区分本机完成、已发布和待验收；默认只交付Markdown。
+- 本版管理文件docs/版本/1.2.0开发管理.md持续区分本机完成、已发布和待验收；默认只交付Markdown。
 
 ## 中英文与文档
 
@@ -89,7 +89,7 @@
 
 - npm run test:focus会打开隔离测试输入窗口并自动输入12秒，另起后台进程运行真实Overlay源码；只替换目标窗口依赖与查询响应，虚拟推进查询到期时刻。验证前台PID/keyWindow/firstResponder/输入内容/光标及中文markedText，结束清理随机Bundle域；不读用户编辑器、不调用模型。需明确测试授权且避免用户正在输入时运行，不放入普通CI或npm包。
 
-- 后台额度/IP刷新与重绘不得调用activate、makeKey、runModal或更换用户keyWindow/firstResponder；需要激活的操作只能由用户明确点击触发。test:polling检查任何时间边界均不自动查询、手动查询保留及快照过期；焦点测试的模拟输入范围不能说成全输入法验收。
+- 后台额度/IP刷新与重绘不得调用activate、makeKey、runModal或更换用户keyWindow/firstResponder；需要激活的操作只能由用户明确点击触发。test:polling检查关闭时不自动查询、开启300/60秒、冷却互斥、手动查询及快照过期；焦点测试的模拟输入范围不能说成全输入法验收。
 
 - 版本索引与发布步骤见docs/版本/README.md；package.json为唯一版本源，原生产物Info.plist由构建生成。源码、构建、npm公开安装及本机版本分开记录；发布后不移动标签，纯文档提交不改变包版本。
 
@@ -98,7 +98,9 @@
 - `src/ip-guard/`由浮窗通过`src/overlay-guard.js`启动，固定127.0.0.1:18197；Unix控制socket使用本用户私有目录。工具启动即启动代理；只有开关打开且有效IP命中白名单才允许转发，关闭开关也拒绝，不提供无校验放行模式。
 - 不再为Claude套sandbox-exec：它会导致Chromium辅助进程自身沙箱初始化失败。桌面按钮仅正常打开官方应用；CLI `protected`仅作为代理环境入口，不增加外层沙箱。不得自动启动/关闭真实Claude。
 - 桌面代理使用官方egressProxyUrl当前用户受管配置；终端Code使用其settings.json env。配置修改前备份、保留无关键、不读取令牌；需用户手动重开Claude生效。不修改系统全局代理或官方应用安装包。
-- 当前IPv4 HTTPS CONNECT 443；周期复查有效租约内不断流，失败、过期或网络/配置变化撤销。退出控制程序或心跳中断关闭代理，禁止自动回退直连。
+- 当前IPv4 HTTPS CONNECT 443；保护检测ipinfo主查、ipify备用，主源429独立冷却10分钟；每轮至少60秒，网络/配置/手动变化先阻断再等待最小间隔，旧30秒设置迁移为60秒；周期复查有效租约内不断流，失败、过期或网络/配置变化撤销。退出控制程序或心跳中断关闭代理，禁止自动回退直连。
 - 应用代理不等于系统过滤：更新器、外部浏览器、忽略代理的程序及系统代发流量有覆盖边界，不能承诺全部流量防绕过。真实兼容验收须用户单独确认。离屏UI测试不得抢输入焦点。
 
 - 网络与保护统一分区，收起显示状态、当前/允许IP及检测时间，展开编辑白名单/周期/代理及原设置；保护开启时出口地址以保护报告为准，地理查询不能覆盖，超时/失败显示未知。桌面启动按钮文案“启动 Claude”，仍仅正常打开。
+
+- 代理配置入口`src/overlay-proxy.js`仅status只读，start/stop由用户点击触发；`proxy-config.js`管理当前用户桌面策略与CLI env、私有备份记录和按字段恢复。不得在安装/更新/启动时静默配置，不自动重开Claude。旧版无快照不得猜测原代理，恢复默认需要用户确认；真实管理员测试与临时目录系统工具测试分别记录。

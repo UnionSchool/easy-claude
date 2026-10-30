@@ -18,9 +18,16 @@ export async function readPublicIP({ run = promisify(execFile), env = process.en
     return stdout;
   };
   let data;
-  try { data = JSON.parse(await request('https://ipinfo.io/json')); }
-  catch { throw new Error(L('IP异常', 'IP unavailable')); }
-  if (!data || typeof data.ip !== 'string' || !isIP(data.ip)) throw new Error(L('IP异常', 'IP unavailable'));
+  for (const url of ['https://ipinfo.io/json', 'https://api.ipify.org?format=json']) {
+    try {
+      const value = JSON.parse(await request(url));
+      if (!value || typeof value.ip !== 'string' || !isIP(value.ip)) throw new Error('Invalid IP');
+      // 备用只提供IP，不能将旧城市或时区附在新的出口上。
+      data = url.includes('ipinfo.io') ? value : { ip: value.ip };
+      break;
+    } catch { /* 主源失败时仅尝试一次独立备用查询。 */ }
+  }
+  if (!data) throw new Error(L('IP异常', 'IP unavailable'));
   const ip = data.ip;
   let city = null, timezone = null;
   if (typeof data.city === 'string') {

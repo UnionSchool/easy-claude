@@ -1,5 +1,13 @@
 # 更新记录
 
+## 1.2.0
+
+- Add Start Claude proxy (green) and Stop Claude proxy (yellow) below the local proxy address. Save and restore previous proxy fields; require explicit default restoration for legacy settings without a saved baseline. Never restart Claude automatically.
+
+- Raise the minimum IP check interval to 60 seconds, including manual/network-triggered checks; migrate saved 30-second settings.
+- Add ipify fallback for IP checks, preserve ipinfo as primary, and cool down rate-limited protection sources for ten minutes.
+- Keep forwarding blocked while revalidation waits; never use fallback to override a valid but non-allowlisted primary IP. IP-only fallback does not fabricate a city/time zone.
+
 ## 1.1.0
 
 - Use a fixed local proxy for normal Claude startup; withdraw the outer desktop sandbox after nested-sandbox helper crashes. Fail closed when the switch is off or IP verification is invalid. Official proxy coverage exceptions remain documented.

@@ -48,6 +48,28 @@ export function probeHTTPS(url, { signal, family = 4, ca, timeout = 1000 } = {})
   });
 }
 
+export const EXIT_IP_URLS = ['https://ipinfo.io/json', 'https://api.ipify.org?format=json'];
+
+export function createExitIPProbe({ request = probeHTTPS, now = () => performance.now() } = {}) {
+  const retryAt = new Map();
+  return async signal => {
+    for (const url of EXIT_IP_URLS) {
+      if (signal.aborted) throw new Error('检测已取消');
+      if (now() < (retryAt.get(url) ?? 0)) continue;
+      try {
+        const ip = await request(url, { signal, family: 4, timeout: 5000 });
+        if (signal.aborted) throw new Error('检测已取消');
+        return normalizeIP(ip);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        if (error.rateLimited) retryAt.set(url, now() + 600000);
+      }
+    }
+    const rateLimited = EXIT_IP_URLS.every(url => now() < (retryAt.get(url) ?? 0));
+    throw Object.assign(new Error(rateLimited ? '出口 IP 查询服务均不可用（限流，10分钟后重试）' : '出口 IP 查询服务均不可用'), { rateLimited });
+  };
+}
+
 export class Guard extends EventEmitter {
   constructor({ allowed, probe, ttl = 1000, timeout = 500, cooldown = 1000, now = () => performance.now() }) {
     super();

@@ -728,12 +728,25 @@ struct ControlPanelView: View {
                     Text(L("复查间隔", "Check interval"))
                     Spacer()
                     Picker("", selection: $owner.protectionInterval) {
-                        ForEach([30, 60, 120, 300], id: \.self) { value in Text("\(value)s").tag(value) }
+                        ForEach([60, 120, 300], id: \.self) { value in Text("\(value)s").tag(value) }
                     }.labelsHidden().frame(width: 85)
                         .onChange(of: owner.protectionInterval) { _, _ in owner.protectionConfigurationChanged() }
                 }.font(.system(size: 11)).controlSize(.small)
                 networkRow(L("本机代理", "Local proxy"), "127.0.0.1:18197")
-                Text(L("关闭保护或退出工具，Claude 将无法联网。", "Turning off protection or quitting blocks Claude's proxy connections."))
+                HStack {
+                    Button { owner.changeClaudeProxy() } label: {
+                        Text(owner.proxyActionText).font(.system(size: 11, weight: .medium)).foregroundColor(.black)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(RoundedRectangle(cornerRadius: 5).fill(owner.proxyReport?.active == true ? Color.yellow : Color.green))
+                    }.buttonStyle(.plain)
+                        .disabled(owner.proxyProcess != nil || owner.proxyReport == nil)
+                        .accessibilityIdentifier("claudeProxyAction")
+                    if owner.proxyProcess != nil { ProgressView().controlSize(.small) }
+                }
+                if let message = owner.proxyMessage {
+                    Text(message).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Text(L("Claude指向本机代理时，关闭保护或退出工具会阻断连接。配置变更需手动重开Claude生效。", "While Claude uses this proxy, turning off protection or quitting blocks connections. Reopen Claude manually after configuration changes."))
                     .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if let error = owner.protectionError {
@@ -852,8 +865,68 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         var checkedAt: String?
         var ready: Bool?
     }
+    struct ProxyReport: Decodable {
+        var active: Bool
+        var configured: Bool
+        var hasBackup: Bool?
+        var machinePolicy: Bool?
+        var needsDefaultRestore: Bool?
+        var needsRestart: Bool?
+        var restoredDefault: Bool?
+        var error: String?
+    }
+    @Published var proxyReport: ProxyReport?
+    @Published var proxyMessage: String?
+    @Published var proxyProcess: Process?
+    var proxyActionText: String {
+        guard proxyReport != nil else { return L("检查代理中…", "Checking proxy…") }
+        return proxyReport?.active == true ? L("停止Claude代理", "Stop Claude proxy") : L("启动Claude代理", "Start Claude proxy")
+    }
+    func checkProxyConfiguration() { runProxyAction("status") }
+    func changeClaudeProxy() { runProxyAction(proxyReport?.active == true ? "stop" : "start") }
+    func runProxyAction(_ action: String) {
+        guard proxyProcess == nil else { return }
+        let process = Process(), pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: node)
+        process.arguments = [URL(fileURLWithPath: script).deletingLastPathComponent().appendingPathComponent("overlay-proxy.js").path, action]
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = searchPath
+        if !claudeHome.isEmpty { env["CLAUDE_CONFIG_DIR"] = claudeHome }
+        process.environment = env
+        process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] process in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            Task { @MainActor in
+                guard let self, self.proxyProcess === process else { return }
+                self.proxyProcess = nil
+                guard data.count <= 8192, let result = try? JSONDecoder().decode(ProxyReport.self, from: data) else {
+                    self.proxyReport = nil
+                    self.proxyMessage = L("无法检查代理配置，请重开面板后重试。", "Cannot verify proxy settings. Reopen the panel to retry.")
+                    return
+                }
+                self.proxyReport = result
+                if let error = result.error {
+                    self.proxyMessage = AppLanguage.current == .zh ? error : "Proxy configuration failed. Check permissions and saved backups."
+                } else if result.machinePolicy == true {
+                    self.proxyMessage = L("存在机器级代理策略，请由管理员处理。", "A machine-level proxy policy requires administrator management.")
+                } else if result.needsDefaultRestore == true {
+                    let alert = NSAlert()
+                    alert.messageText = L("旧配置缺少原始备份", "Original settings were not saved")
+                    alert.informativeText = L("这份代理配置并非由新按钮保存。无法确认原来的自定义代理；可以只移除 easy-claude 的代理字段，恢复应用默认网络。其他字段保留，Claude 不会自动重开。", "These settings have no saved original proxy. You may remove only easy-claude proxy fields and restore application defaults. Other settings stay intact; Claude will not restart.")
+                    alert.addButton(withTitle: L("恢复默认", "Restore defaults")); alert.addButton(withTitle: L("取消", "Cancel"))
+                    if alert.runModal() == .alertFirstButtonReturn { self.runProxyAction("stop-default") }
+                } else if result.needsRestart == true {
+                    self.proxyMessage = result.active ? L("代理配置成功。请确认保护开启且IP验证通过，再手动重开Claude。", "Proxy configured. Ensure protection is enabled and the IP is verified, then reopen Claude manually.") : (result.restoredDefault == true ? L("已恢复默认配置，请手动重开Claude生效。", "Defaults restored. Reopen Claude manually to apply.") : L("已恢复原代理配置，请手动重开Claude生效。", "Original proxy settings restored. Reopen Claude manually to apply."))
+                } else { self.proxyMessage = nil }
+                self.resizeControls()
+            }
+        }
+        proxyProcess = process
+        do { try process.run() }
+        catch { proxyProcess = nil; proxyReport = nil; proxyMessage = L("无法启动代理配置组件。", "Cannot start the proxy configuration helper.") }
+    }
     @Published var automaticUsageRefresh = UserDefaults.standard.bool(forKey: "automaticUsageRefresh")
-    var protectionIsAllowed: Bool { protectionEnabled && protectionError == nil && protectionReport?.ready == true && protectionReport?.state == "allowed" }
+    var protectionIsAllowed: Bool { protectionEnabled && proxyReport?.configured == true && protectionError == nil && protectionReport?.ready == true && protectionReport?.state == "allowed" }
     var networkIPText: String {
         guard protectionEnabled else { return displayMessage(ipText) }
         guard protectionError == nil, let report = protectionReport else { return L("IP 未知", "IP unknown") }
@@ -877,7 +950,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     @Published var protectionEnabled = UserDefaults.standard.bool(forKey: "ipProtectionEnabled")
     @Published var protectionIPs = UserDefaults.standard.string(forKey: "ipProtectionAddresses") ?? ""
-    @Published var protectionInterval = UserDefaults.standard.object(forKey: "ipProtectionInterval") as? Int ?? 60
+    @Published var protectionInterval = max(60, UserDefaults.standard.object(forKey: "ipProtectionInterval") as? Int ?? 60)
     @Published var protectionReport: ProtectionReport?
     @Published var protectionError: String?
     var protectionProcess: Process?
@@ -892,6 +965,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         if !protectionEnabled {
             return protectionProcess != nil && protectionReport?.state != "off" ? L("正在阻断代理…", "Blocking proxy…") : L("保护已关闭 · 代理已阻断", "Protection off · proxy blocked")
         }
+        guard proxyReport?.configured == true else { return L("Claude代理未配置完成 · 未受保护", "Claude proxy is not configured · unprotected") }
         switch protectionReport?.state {
         case "allowed": return L("代理已放通 · 出口 IP 符合白名单", "Proxy allowed · exit IP matches the allowlist")
         case "checking": return L("验证中 · 代理已阻断", "Verifying · proxy blocked")
@@ -920,13 +994,14 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var controlHeight: CGFloat {
         let state = currentControlState()
         let quotaHeight: CGFloat = state.login ? 155 : CGFloat(max(1, state.quotas.count)) * 62 + (state.mode == "ready" ? 0 : 65)
-        let total = quotaHeight + 310 + (controlsExpanded ? (followIPTimeZone ? 395 : 460) : 0)
+        let total = quotaHeight + 310 + (controlsExpanded ? (followIPTimeZone ? 455 : 520) : 0)
         return min(total, max(280, (status?.button?.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 900) - 65))
     }
     var status: NSStatusItem?
     var timer: Timer?
     var ipQuery: Process?
     var ipLastAttempt = Date.distantPast
+    var ipLastProbeUptime = -Double.infinity
     var ipText = L("正在获取IP…", "Fetching IP…")
     var query: Process?
     var updater: Process?
@@ -958,6 +1033,9 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         node = args[1]; script = args[2]; searchPath = args[3]
         claudeHome = args.count > 4 ? args[4] : ""
         let prefs = UserDefaults.standard
+        if let previous = prefs.object(forKey: "ipProtectionInterval") as? Int, previous < 60 {
+            prefs.set(60, forKey: "ipProtectionInterval")
+        }
         if prefs.object(forKey: "leftInset") != nil {
             inset = CGPoint(x: prefs.double(forKey: "leftInset"), y: prefs.double(forKey: "bottomInset"))
         }
@@ -1019,6 +1097,8 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         controlPopover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         controlPopover.contentViewController = NSHostingController(rootView: ControlPanelView(owner: self))
         timer = Timer.scheduledTimer(timeInterval: 0.4, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
+        // 授权确认或菜单跟踪期间也要维持保护心跳。
+        if let timer { RunLoop.main.add(timer, forMode: .common) }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(hide), name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(protectionNetworkChanged), name: NSWorkspace.didWakeNotification, object: nil)
         protectionPathMonitor.pathUpdateHandler = { [weak self] _ in
@@ -1026,6 +1106,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         }
         protectionPathMonitor.start(queue: DispatchQueue(label: "easy-claude.network"))
         startProtectionService()
+        checkProxyConfiguration()
         tick()
     }
     func setProtectionEnabled(_ enabled: Bool) {
@@ -1160,6 +1241,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         if controlPopover.contentSize != size { controlPopover.contentSize = size }
     }
     @objc func openControls() {
+        checkProxyConfiguration()
         guard let button = status?.button else { return }
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = makeMenu(); status?.menu = menu; button.performClick(nil); status?.menu = nil
@@ -1290,7 +1372,9 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         if followIPTimeZone { refreshIP() }
     }
     @objc func refreshIP() {
-        guard ipQuery == nil else { return }
+        let uptime = ProcessInfo.processInfo.systemUptime
+        guard ipQuery == nil, uptime - ipLastProbeUptime >= 60 else { return }
+        ipLastProbeUptime = uptime
         ipLastAttempt = Date()
         let process = Process(), pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: node)

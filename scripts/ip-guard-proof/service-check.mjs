@@ -22,7 +22,7 @@ async function fixture(t, options = {}) {
   return { ...service, input, path, messages: () => data.trim().split('\n').map(line => JSON.parse(line)),
     send: command => input.write(JSON.stringify(command) + '\n') };
 }
-const config = { action: 'configure', enabled: true, ips: ['203.0.113.1'], interval: 30 };
+const config = { action: 'configure', enabled: true, ips: ['203.0.113.1'], interval: 60 };
 
 test('真实控制服务：开启验证、只读发现、IPv4白名单和关闭状态', async t => {
   const service = await fixture(t);
@@ -44,6 +44,7 @@ test('编辑白名单期间保持阻断，旧探测返回不能重新放通', as
   service.send({ action: 'hold' }); await until(() => service.status().state === 'blocked');
   resolve('203.0.113.1'); await sleep(550);
   assert.equal(service.status().ready, false);
+  assert.equal(service.status().checkedAt, null, '被取消的旧检测不能更新时间');
 });
 
 test('失去心跳或控制输入关闭，服务关停并撤销放行', async t => {
@@ -69,4 +70,22 @@ test('桌面启动因嵌套沙箱不兼容明确拒绝，验证通过也不执�
   service.send({ action: 'configure', enabled: false }); await until(() => service.status().state === 'off');
   service.send({ action: 'launchDesktop', appPath: '/fixture/Claude.app' });
   await until(() => service.status().state === 'fault'); assert.equal(launches.length, 0);
+});
+
+
+test('最低60秒覆盖手动复查和网络事件，等待期间阻断，到点执行最新检测', async t => {
+  let clock = 0, calls = 0;
+  const service = await fixture(t, { now: () => clock, probe: async () => { calls++; return '203.0.113.1'; } });
+  service.send({ ...config, interval: 30 }); await until(() => service.status().state === 'fault');
+  assert.equal(calls, 0);
+  service.send(config); await until(() => service.status().ready); assert.equal(calls, 1);
+  const checked = service.status().checkedAt;
+  for (const action of ['verify', 'invalidate', 'verify']) service.send({ action });
+  await until(() => service.status().state === 'blocked');
+  assert.equal(calls, 1); assert.equal(service.status().ready, false);
+  clock = 59999; service.send({ action: 'heartbeat' }); await service.verify();
+  assert.equal(calls, 1); assert.equal(service.status().checkedAt, checked);
+  clock = 60000; service.send({ action: 'heartbeat' });
+  await until(() => calls === 2 && service.status().ready);
+  assert.equal(calls, 2); assert.equal(service.status().ready, true);
 });

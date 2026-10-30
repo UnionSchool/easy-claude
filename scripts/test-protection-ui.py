@@ -11,7 +11,11 @@ entry = r'''
  @MainActor static func main() throws {
   _ = NSApplication.shared
   NSApp.setActivationPolicy(.prohibited)
+  UserDefaults.standard.set(30, forKey:"ipProtectionInterval")
   let owner = Overlay()
+  precondition(owner.protectionInterval == 60)
+  owner.protectionConfigurationChanged()
+  precondition(UserDefaults.standard.integer(forKey:"ipProtectionInterval") == 60)
   owner.node = CommandLine.arguments[1]; owner.script = CommandLine.arguments[2]
   owner.searchPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
   let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -21,6 +25,26 @@ entry = r'''
    while !check() && Date() < deadline { drain() }
    precondition(check())
   }
+  owner.refreshIP()
+  let firstIPQuery = owner.ipQuery
+  precondition(firstIPQuery != nil)
+  owner.refreshIP();precondition(owner.ipQuery === firstIPQuery)
+  wait { owner.ipQuery == nil }
+  let ipAttempt = owner.ipLastProbeUptime
+  owner.ipLastAttempt = .distantPast
+  owner.refreshIP()
+  precondition(owner.ipQuery == nil && owner.ipLastProbeUptime == ipAttempt)
+  UserDefaults.standard.set("zh", forKey:"interfaceLanguage")
+  owner.checkProxyConfiguration()
+  wait { owner.proxyProcess == nil && owner.proxyReport != nil }
+  precondition(owner.proxyReport?.active == false && owner.proxyActionText == "启动Claude代理")
+  owner.changeClaudeProxy()
+  wait { owner.proxyProcess == nil && owner.proxyReport?.configured == true }
+  precondition(owner.proxyReport?.active == true && owner.proxyActionText == "停止Claude代理")
+  owner.changeClaudeProxy()
+  wait { owner.proxyProcess == nil && owner.proxyReport?.active == false }
+  owner.changeClaudeProxy()
+  wait { owner.proxyProcess == nil && owner.proxyReport?.configured == true }
   precondition(!owner.automaticUsageRefresh)
   owner.toggleAutomaticUsageRefresh()
   precondition(owner.automaticUsageRefresh && Overlay().automaticUsageRefresh)
@@ -48,6 +72,9 @@ entry = r'''
   for language in ["zh", "en"] {
    UserDefaults.standard.set(language, forKey:"interfaceLanguage")
    for enabled in [true, false] {
+    for proxyActive in [false, true] {
+    owner.runProxyAction(proxyActive ? "start" : "stop")
+    wait { owner.proxyProcess == nil && owner.proxyReport?.active == proxyActive }
     for expanded in [false, true] {
     owner.controlsExpanded = expanded
     owner.setProtectionEnabled(enabled)
@@ -61,8 +88,9 @@ entry = r'''
     host.layoutSubtreeIfNeeded();drain()
     let bitmap = host.bitmapImageRepForCachingDisplay(in:host.bounds)!
     host.cacheDisplay(in:host.bounds,to:bitmap)
-    try bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:CommandLine.arguments[3]+"/"+language+(enabled ? "-on" : "-off")+(expanded ? "-expanded.png" : "-collapsed.png")))
+    try bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:CommandLine.arguments[3]+"/"+language+(enabled ? "-on" : "-off")+(expanded ? "-expanded" : "-collapsed")+(proxyActive ? "-proxy-on.png" : "-proxy-off.png")))
     precondition(!panel.isVisible)
+    }
     }
    }
   }
@@ -99,6 +127,15 @@ with tempfile.TemporaryDirectory(prefix='easy-protection-ui-') as temporary:
         'CFBundleIdentifier': domain, 'CFBundleExecutable':'protection-checks',
         'CFBundlePackageType':'APPL', 'LSUIElement':True, 'CFBundleShortVersionString':'test'}))
     (work / 'overlay-guard.js').write_text(fixture)
+    (work / 'overlay-proxy.js').write_text(r'''
+const fs = require('node:fs');
+const path = require('node:path').join(__dirname, 'proxy-test-state.json');
+const action = process.argv[2];
+let active = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path)) : false;
+if(action !== 'status') { active = action === 'start'; fs.writeFileSync(path, JSON.stringify(active)); }
+console.log(JSON.stringify({active,configured:active,hasBackup:active,needsRestart:action !== 'status'}));
+''')
+    (work / 'overlay-ip.js').write_text('console.log(JSON.stringify({ip:"203.0.113.1",city:"Test",timezone:"Asia/Shanghai"}))')
     (work / 'overlay-query.js').write_text("console.log(JSON.stringify({windows:[],fetchedAt:Date.now()/1000}))")
     source = work / 'Protection.swift'
     source.write_text((root/'native/Overlay.swift').read_text().split('@main\nstruct Main')[0] + entry)

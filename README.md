@@ -14,16 +14,18 @@ Enable Exit IP protection and enter the IPv4 allowlist. Only a successful curren
 
 Configuration changes require manually reopening Claude; the tool does not restart it. This is application proxy control, not an OS firewall: native updates, external browsers and programs that ignore proxy settings are not fully covered. IPv4 HTTPS CONNECT on port 443 is supported; IPv6 and other target ports are refused by this proxy. Protection covers configured proxy connections and does not guarantee control of every Claude-related network request.
 
+Below Local proxy, click green Start Claude proxy to back up and configure Desktop and Code. Desktop changes require administrator approval. Yellow Stop Claude proxy restores saved proxy fields while preserving unrelated later edits; legacy settings without a baseline require confirmation before restoring defaults. Reopen Claude manually after configuration changes.
+
 [Setup, proxy configuration and removal](docs/exit-ip-protection.md) · [Development verification](docs/版本/出口IP保护开发管理.md)
 
-## v1.1.0 release notes
+## v1.2.0 release notes
 
-- Add a fixed local proxy and IPv4 exit allowlist; invalid, expired or disabled checks block proxy connections.
-- Group Network & protection and synchronize the displayed exit with protection checks.
-- Add an automatic usage refresh switch, off by default, retaining manual refresh and HTTP 429 cooldowns.
-- Keep normal Launch Claude behavior and identify ipinfo.io as the time-zone lookup source.
+- Add green Start Claude proxy and yellow Stop Claude proxy buttons; save and restore original proxy fields. Legacy settings require confirmation before restoring defaults.
+- Enforce a 60-second minimum IP check interval, including manual/network triggers; migrate saved 30-second settings.
+- Fall back from ipinfo to ipify on lookup failure or rate limiting, with a ten-minute protection-source cooldown for HTTP 429.
+- Keep protection heartbeats alive during menus and confirmations. Updates only inspect settings; they never silently configure proxies or restart Claude.
 
-[Release history](CHANGELOG.md) · [1.1.0 development and release](docs/版本/1.1.0开发管理.md)
+[Release history](CHANGELOG.md) · [1.2.0 development and release](docs/版本/1.2.0开发管理.md)
 
 ## Install and run
 

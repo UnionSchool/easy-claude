@@ -241,6 +241,8 @@ test('macOS 真实沙箱：只允许代理端口，直连/其他端口/IPv6/子�
     (async () => console.log(JSON.stringify(await Promise.all([attempt('udp4', '127.0.0.1'), attempt('udp6', '::1')]))))();
   `], { timeout: 5000 });
   assert.deepEqual(JSON.parse(udp.stdout), ['EPERM', 'EPERM']);
+  // 前面的子进程检查可能超过短测试租约；流式撤销用刚验证的租约单独断言。
+  assert.equal(await guard.verify(), true);
   const client = spawn('/usr/bin/sandbox-exec', ['-p', profile, process.execPath, '-e', `
     const socket = require('node:net').connect({host:'127.0.0.1', port:${port}});
     let started = false;

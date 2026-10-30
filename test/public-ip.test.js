@@ -36,16 +36,16 @@ test('无环境代理时读取系统HTTPS代理；无代理仍只请求一次', 
   }
 });
 
-test('无效JSON、无效IP、错误响应与限流均显示IP异常，不追加查询', async () => {
+test('双源无效JSON、无效IP、错误响应与限流均显示IP异常，每源只查一次', async () => {
   for (const value of ['', '<html>blocked</html>', 'null', '{}', '[]', '{"ip":123}', '{"ip":"unknown"}', '{"ip":"203.0.113.1\\nmalicious"}', '{"error":{"message":"rate limited"}}']) {
     let count = 0;
     await assert.rejects(readPublicIP({ platform: 'linux', env: {}, run: async () => { count++; return { stdout: value }; } }), /IP异常/);
-    assert.equal(count, 1);
+    assert.equal(count, 2);
   }
   for (const message of ['network', 'HTTP 429']) {
     let count = 0;
     await assert.rejects(readPublicIP({ platform: 'linux', env: {}, run: async () => { count++; throw new Error(message); } }), /IP异常/);
-    assert.equal(count, 1);
+    assert.equal(count, 2);
   }
 });
 
@@ -73,4 +73,16 @@ test('时区独立于城市，无效时区保持未知，城市文本受限', as
     assert.equal(result.timezone, expectedZone);
     assert.equal(result.city, expectedCity);
   }
+});
+
+
+test('ipinfo失败后使用ipify，备用结果不伪造城市或时区', async () => {
+  const urls = [];
+  const result = await readPublicIP({ platform: 'linux', env: {}, run: async (_cmd, args) => {
+    urls.push(args.at(-1));
+    if (urls.length === 1) throw new Error('HTTP 429');
+    return { stdout: JSON.stringify({ ip: '198.51.100.7', city: 'Untrusted', timezone: 'Asia/Shanghai' }) };
+  } });
+  assert.deepEqual(urls, ['https://ipinfo.io/json', 'https://api.ipify.org?format=json']);
+  assert.deepEqual(result, { ip: '198.51.100.7', city: null, timezone: null });
 });
