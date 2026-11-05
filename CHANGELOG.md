@@ -1,5 +1,9 @@
 # 更新记录
 
+## 1.3.0
+
+- Add a persistent, editable Subscription day (1–31 or Not set) below automatic usage refresh, visible with settings collapsed.
+
 ## 1.2.0
 
 - Add Start Claude proxy (green) and Stop Claude proxy (yellow) below the local proxy address. Save and restore previous proxy fields; require explicit default restoration for legacy settings without a saved baseline. Never restart Claude automatically.

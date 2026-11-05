@@ -18,14 +18,12 @@ Below Local proxy, click green Start Claude proxy to back up and configure Deskt
 
 [Setup, proxy configuration and removal](docs/exit-ip-protection.md) · [Development verification](docs/版本/出口IP保护开发管理.md)
 
-## v1.2.0 release notes
+## v1.3.0 release notes
 
-- Add green Start Claude proxy and yellow Stop Claude proxy buttons; save and restore original proxy fields. Legacy settings require confirmation before restoring defaults.
-- Enforce a 60-second minimum IP check interval, including manual/network triggers; migrate saved 30-second settings.
-- Fall back from ipinfo to ipify on lookup failure or rate limiting, with a ten-minute protection-source cooldown for HTTP 429.
-- Keep protection heartbeats alive during menus and confirmations. Updates only inspect settings; they never silently configure proxies or restart Claude.
+- Add a persistent Subscription day row below Automatic usage refresh, visible with settings collapsed. Select day 1–31 or Not set.
+- Subscription day is a personal note; it does not read billing or change usage resets.
 
-[Release history](CHANGELOG.md) · [1.2.0 development and release](docs/版本/1.2.0开发管理.md)
+[Release history](CHANGELOG.md) · [1.3.0 verification](docs/版本/1.3.0开发管理.md)
 
 ## Install and run
 
@@ -119,3 +117,7 @@ CLI login can expire while the desktop remains signed in. Official service respo
 [Version management](https://github.com/UnionSchool/easy-claude/blob/main/docs/版本/README.md)
 
 The Network & protection section groups the current exit, allowlist and protection status. With protection on, the displayed exit follows the protection check immediately; failures show unknown instead of an old IP. Expand More settings to edit the allowlist and interval.
+
+## Subscription day
+
+A Subscription day row below Automatic usage refresh stays visible with settings collapsed. Choose day 1–31 or Not set; each tool saves its own value. This is a personal note, not a billing lookup or usage reset.

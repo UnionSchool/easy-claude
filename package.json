@@ -1,6 +1,6 @@
 {
   "name": "easy-claude",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Claude Code quota rings and transparent world clock for Claude desktop",
   "type": "module",
   "bin": {
@@ -31,7 +31,8 @@
     "test:protection": "node --test --test-timeout=15000 scripts/ip-guard-proof/verify.mjs scripts/ip-guard-proof/service-check.mjs",
     "test:protection-ui": "python3 scripts/test-protection-ui.py",
     "test:focus": "python3 scripts/test-focus.py",
-    "test:polling": "python3 scripts/test-polling.py"
+    "test:polling": "python3 scripts/test-polling.py",
+    "test:subscription": "python3 scripts/test-subscription.py"
   },
   "license": "MIT",
   "author": "UnionSchool",

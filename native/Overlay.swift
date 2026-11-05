@@ -653,6 +653,7 @@ struct ControlPanelView: View {
                     }
                     Divider()
                     setting(L("额度自动刷新", "Automatic usage refresh"), value: owner.automaticUsageRefresh) { owner.toggleAutomaticUsageRefresh() }
+                    subscription
                     Divider()
                     HStack(spacing: 7) {
                         Image(systemName: "clock").foregroundStyle(.secondary)
@@ -687,6 +688,19 @@ struct ControlPanelView: View {
         .background(Color(red: 0.09, green: 0.11, blue: 0.13))
         .preferredColorScheme(.dark)
         .lineSpacing(2)
+    }
+    var subscription: some View {
+        HStack {
+            Text(L("订阅日期", "Subscription day")).font(.system(size: 12))
+            Spacer()
+            Picker(L("订阅日期", "Subscription day"), selection: Binding(
+                get: { owner.subscriptionDay }, set: { owner.setSubscriptionDay($0) })) {
+                Text(L("未设置", "Not set")).tag(0)
+                ForEach(1...31, id: \.self) { day in Text(L("\(day)日", "Day \(day)")).tag(day) }
+            }
+            .labelsHidden().frame(width: 110).controlSize(.small)
+            .accessibilityIdentifier("subscriptionDay")
+        }.frame(minHeight: 20)
     }
     func iconButton(_ label: String, _ image: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: image).frame(width: 20, height: 20) }
@@ -987,6 +1001,11 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var ipClockCity: String?
     var manualClockZone = TimeZone(identifier: "America/Los_Angeles")!
     var manualClockCity = "硅谷"
+    // 仅记录用户指定的每月日期，不读取账号账单或据此推算额度重置。
+    @Published var subscriptionDay: Int = {
+        let day = UserDefaults.standard.integer(forKey: "subscriptionDay")
+        return (1...31).contains(day) ? day : 0
+    }()
     @Published var controlRevision = 0
     let controlPopover = NSPopover()
     var controlsExpanded = false
@@ -994,7 +1013,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var controlHeight: CGFloat {
         let state = currentControlState()
         let quotaHeight: CGFloat = state.login ? 155 : CGFloat(max(1, state.quotas.count)) * 62 + (state.mode == "ready" ? 0 : 65)
-        let total = quotaHeight + 310 + (controlsExpanded ? (followIPTimeZone ? 455 : 520) : 0)
+        let total = quotaHeight + 342 + (controlsExpanded ? (followIPTimeZone ? 455 : 520) : 0)
         return min(total, max(280, (status?.button?.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 900) - 65))
     }
     var status: NSStatusItem?
@@ -1223,6 +1242,11 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         if status?.button?.toolTip != tip { status?.button?.toolTip = tip }
         status?.button?.setAccessibilityLabel("Easy \(controlProduct) \(state.headline) \(state.text)")
         if controlPopover.isShown { resizeControls() }
+    }
+    func setSubscriptionDay(_ day: Int) {
+        guard (0...31).contains(day) else { return }
+        subscriptionDay = day
+        UserDefaults.standard.set(day, forKey: "subscriptionDay")
     }
     func setLanguage(_ value: String) {
         guard AppLanguage(rawValue: value) != nil else { return }
