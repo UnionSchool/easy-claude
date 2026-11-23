@@ -71,7 +71,7 @@ The CLI uses the same saved preference. `EASY_LANGUAGE=en` or `EASY_LANGUAGE=zh`
 
 ## Network exit and IP time zone
 
-A single request to `https://ipinfo.io/json` reads the public IP, city and IANA time zone. The panel displays `City·IP`, refreshing at startup, every five minutes or on demand. A failed lookup shows an explicit error rather than an old IP. IP history is not saved.
+The primary `https://ipinfo.io/json` reads the public IP, city and IANA time zone. On failure, `https://api.ipify.org?format=json` provides IP only; fallback city/time zone remain unknown. Each source has a 3-second connection and 5-second total timeout. The panel displays `City·IP`, refreshing at startup, every five minutes or on demand. A failed lookup shows an explicit error rather than an old IP. IP history is not saved.
 
 **Follow IP time zone** is off by default. Enable it to hide manual zone choices and use the validated IP time zone and returned city. Failed lookups temporarily restore the saved manual time; successful lookups resume following. Disable it to restore manual choices. Proxy routing can make this exit differ from AI traffic; geolocation may be inaccurate or rate-limited.
 
