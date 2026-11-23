@@ -677,6 +677,8 @@ struct ControlPanelView: View {
                     Label(owner.controlsExpanded ? L("收起设置", "Less settings") : L("更多设置", "More settings"), systemImage: "gearshape")
                 }
                 .buttonStyle(.plain).accessibilityIdentifier("moreSettings")
+                Text("v\(owner.appVersion)").font(.system(size: 11)).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("appVersion")
                 Spacer()
                 Button { owner.launchClaudeApp() } label: { Label(L("启动 Claude", "Launch Claude"), systemImage: "play") }
                     .buttonStyle(.plain).accessibilityIdentifier("launchClaudeApp")

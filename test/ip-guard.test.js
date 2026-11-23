@@ -103,3 +103,22 @@ test('双源429时冷却不追加请求，冷却结束才允许再试', async ()
   assert.equal(count, 2);
   clock = 600000; await assert.rejects(limited(new AbortController().signal)); assert.equal(count, 4);
 });
+
+
+test('保护检测主源超时或网络失败时切备用，备用成功仍须校验白名单', async t => {
+  for (const failure of ['检测超时', 'ECONNRESET']) {
+    const calls = [];
+    const probe = createExitIPProbe({ request: async url => {
+      calls.push(url);
+      if (url === EXIT_IP_URLS[0]) throw new Error(failure);
+      return '198.51.100.9';
+    } });
+    const guard = new Guard({ allowed: ['203.0.113.1'], probe });
+    t.after(() => guard.revoke()); guard.enable();
+    assert.equal(await guard.verify(), false);
+    assert.deepEqual(calls, EXIT_IP_URLS);
+    assert.equal(guard.lastIP, '198.51.100.9');
+    assert.equal(guard.reason, '出口不在白名单');
+    assert.equal(guard.usable(), false);
+  }
+});

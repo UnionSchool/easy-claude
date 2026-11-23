@@ -1,5 +1,12 @@
 # 更新记录
 
+## 1.3.1
+
+- Shorten public IP connection/total timeouts to 3/5 seconds (7-second process limit), allowing faster ipinfo-to-ipify fallback. Preserve proxy routing, TLS/IP checks and unknown fallback city/time zone.
+- Cover timeout, network failure, HTTP 429 and invalid response fallback; protection still checks the fallback IP against the allowlist.
+
+- Show the running app version beside More settings / Less settings, including the collapsed panel.
+
 ## 1.3.0
 
 - Add a persistent, editable Subscription day (1–31 or Not set) below automatic usage refresh, visible with settings collapsed.
