@@ -13,9 +13,9 @@ test('只请求ipinfo一次，同时读取IP、城市和时区，保留代理与
       assert.equal(cmd, '/usr/bin/curl');
       assert.equal(args.at(-1), 'https://ipinfo.io/json');
       assert.equal(options.env.https_proxy, 'http://127.0.0.1:7890');
-      assert.equal(options.timeout, 7000);
-      assert.equal(args[args.indexOf('--connect-timeout') + 1], '3');
-      assert.equal(args[args.indexOf('--max-time') + 1], '5');
+      assert.equal(options.timeout, 30000);
+      assert.equal(args[args.indexOf('--connect-timeout') + 1], '10');
+      assert.equal(args[args.indexOf('--max-time') + 1], '20');
       assert.equal(options.maxBuffer, 8192);
       assert.ok(args.includes('-q') && args.includes('--fail') && !args.includes('--location'));
       return { stdout: JSON.stringify(response) };
@@ -95,7 +95,7 @@ test('主源超时、网络失败、429、非法JSON及IP均立即切备用，�
     const urls = [];
     const run = async (_cmd, args, options) => {
       const url = args.at(-1); urls.push(url);
-      assert.equal(options.timeout, 7000);
+      assert.equal(options.timeout, 30000);
       if (urls.length === 1) {
         if (failure instanceof Error) throw failure;
         return { stdout: failure };

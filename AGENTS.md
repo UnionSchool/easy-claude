@@ -51,7 +51,7 @@
 
 ## 公网IP菜单
 
-- public-ip.js以https://ipinfo.io/json为主源，失败仅尝试一次https://api.ipify.org?format=json；主源同一响应读取IP、城市、时区，备用仅IP且城市/时区未知；Node net.isIP校验IPv4/IPv6，城市仅接受受限文本；查询失败显示IP异常，城市未知保留IP。curl启用TLS校验、不跟随重定向，单请求5秒（连接3秒）/8KiB上限，子进程7秒兜底，环境代理优先，其次系统HTTPS代理，不发送账号凭据。
+- public-ip.js以https://ipinfo.io/json为主源，失败仅尝试一次https://api.ipify.org?format=json；主源同一响应读取IP、城市、时区，备用仅IP且城市/时区未知；Node net.isIP校验IPv4/IPv6，城市仅接受受限文本；查询失败显示IP异常，城市未知保留IP。curl启用TLS校验、不跟随重定向，单请求20秒（连接10秒）/8KiB上限，子进程30秒兜底，环境代理优先，其次系统HTTPS代理，不发送账号凭据。
 - native的IP查询独立于额度与前台窗口，启动及每300秒刷新，手动/网络触发同样遵守单调时钟至少60秒间隔，失败不保留旧IP作为当前值。仅内存展示，不写UserDefaults或历史日志；退出终止查询。
 
 - IP地理接口同一响应读取有效IP、城市与timezone；时区经Intl.DateTimeFormat校验，无效或缺失仅标为时区未知，不回退电脑时区；是否用于时钟由显式跟随开关决定，手动时区配置始终保留。

@@ -13,8 +13,8 @@ export async function readPublicIP({ run = promisify(execFile), env = process.en
   // 限制主源等待，让备用仍有机会及时返回，不在同一源反复重试。
   const request = async url => {
     const { stdout } = await run('/usr/bin/curl', ['-q', '--silent', '--show-error', '--fail', '--proto', '=https',
-      '--connect-timeout', '3', '--max-time', '5', '--max-redirs', '0', url], {
-      timeout: 7000, maxBuffer: 8192, env: proxy ? { ...env, https_proxy: proxy } : env
+      '--connect-timeout', '10', '--max-time', '20', '--max-redirs', '0', url], {
+      timeout: 30000, maxBuffer: 8192, env: proxy ? { ...env, https_proxy: proxy } : env
     });
     return stdout;
   };

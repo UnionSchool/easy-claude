@@ -18,13 +18,12 @@ Below Local proxy, click green Start Claude proxy to back up and configure Deskt
 
 [Setup, proxy configuration and removal](docs/exit-ip-protection.md) · [Development verification](docs/版本/出口IP保护开发管理.md)
 
-## v1.3.1 release notes
+## v1.3.2 release notes
 
-- Reduce each public IP query timeout to 5 seconds (3-second connection timeout), then try ipify if ipinfo fails.
-- Show the running version beside More settings / Less settings.
-- Query intervals are unchanged: geography every 300 seconds; protection defaults to 60 seconds.
+- Increase each public IP query timeout to 20 seconds (10-second connection timeout, 30-second subprocess limit), then try ipify if ipinfo fails.
+- Preserve proxy routing, TLS/IP validation, unknown fallback city/time zone, and existing query intervals (geography every 300 seconds; protection defaults to 60 seconds).
 
-[Release history](CHANGELOG.md) · [1.3.1 verification](docs/版本/1.3.1开发管理.md)
+[Release history](CHANGELOG.md) · [1.3.2 verification](docs/版本/1.3.2开发管理.md)
 
 ## Install and run
 

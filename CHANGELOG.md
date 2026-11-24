@@ -1,5 +1,9 @@
 # 更新记录
 
+## 1.3.2
+
+- Increase public IP query timeouts to 10-second connect, 20-second total, and 30-second subprocess limit; keep ipinfo-to-ipify fallback, proxy routing, TLS/IP validation, and unknown fallback city/time zone.
+
 ## 1.3.1
 
 - Shorten public IP connection/total timeouts to 3/5 seconds (7-second process limit), allowing faster ipinfo-to-ipify fallback. Preserve proxy routing, TLS/IP checks and unknown fallback city/time zone.
