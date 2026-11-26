@@ -73,19 +73,19 @@ test('桌面启动因嵌套沙箱不兼容明确拒绝，验证通过也不执�
 });
 
 
-test('最低60秒覆盖手动复查和网络事件，等待期间阻断，到点执行最新检测', async t => {
+test('支持10秒短周期与3秒最小间隔，等待期间阻断，到点执行最新检测', async t => {
   let clock = 0, calls = 0;
   const service = await fixture(t, { now: () => clock, probe: async () => { calls++; return '203.0.113.1'; } });
-  service.send({ ...config, interval: 30 }); await until(() => service.status().state === 'fault');
+  service.send({ ...config, interval: 5 }); await until(() => service.status().state === 'fault');
   assert.equal(calls, 0);
-  service.send(config); await until(() => service.status().ready); assert.equal(calls, 1);
+  service.send({ ...config, interval: 10 }); await until(() => service.status().ready); assert.equal(calls, 1);
   const checked = service.status().checkedAt;
   for (const action of ['verify', 'invalidate', 'verify']) service.send({ action });
   await until(() => service.status().state === 'blocked');
   assert.equal(calls, 1); assert.equal(service.status().ready, false);
-  clock = 59999; service.send({ action: 'heartbeat' }); await service.verify();
+  clock = 2999; service.send({ action: 'heartbeat' }); await service.verify();
   assert.equal(calls, 1); assert.equal(service.status().checkedAt, checked);
-  clock = 60000; service.send({ action: 'heartbeat' });
+  clock = 3000; service.send({ action: 'heartbeat' });
   await until(() => calls === 2 && service.status().ready);
   assert.equal(calls, 2); assert.equal(service.status().ready, true);
 });

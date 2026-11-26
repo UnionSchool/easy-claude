@@ -14,7 +14,12 @@ export function normalizeIP(value) {
 
 export function parseIPResponse(raw) {
   if (Buffer.byteLength(raw) > 8192) throw new Error('响应过大');
-  return normalizeIP(JSON.parse(raw)?.ip);
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error('空响应');
+  if (trimmed.startsWith('{')) return normalizeIP(JSON.parse(trimmed)?.ip);
+  const trace = trimmed.match(/^ip=([^\r\n]+)$/m);
+  if (trace) return normalizeIP(trace[1].trim());
+  return normalizeIP(trimmed);
 }
 
 export function probeHTTPS(url, { signal, family = 4, ca, timeout = 1000 } = {}) {
@@ -48,16 +53,25 @@ export function probeHTTPS(url, { signal, family = 4, ca, timeout = 1000 } = {})
   });
 }
 
-export const EXIT_IP_URLS = ['https://ipinfo.io/json', 'https://api.ipify.org?format=json'];
+export const EXIT_IP_URLS = [
+  'https://www.cloudflare.com/cdn-cgi/trace',
+  'https://ipv4.icanhazip.com',
+  'https://checkip.amazonaws.com',
+  'https://api.ipify.org?format=json'
+];
 
-export function createExitIPProbe({ request = probeHTTPS, now = () => performance.now() } = {}) {
+export function createExitIPProbe({ request = probeHTTPS, now = () => performance.now(), urls = EXIT_IP_URLS, timeout = 4000 } = {}) {
   const retryAt = new Map();
+  let cursor = 0;
   return async signal => {
-    for (const url of EXIT_IP_URLS) {
+    const start = cursor;
+    cursor = (cursor + 1) % urls.length;
+    for (let offset = 0; offset < urls.length; offset++) {
+      const url = urls[(start + offset) % urls.length];
       if (signal.aborted) throw new Error('检测已取消');
       if (now() < (retryAt.get(url) ?? 0)) continue;
       try {
-        const ip = await request(url, { signal, family: 4, timeout: 5000 });
+        const ip = await request(url, { signal, family: 4, timeout });
         if (signal.aborted) throw new Error('检测已取消');
         return normalizeIP(ip);
       } catch (error) {
@@ -65,7 +79,7 @@ export function createExitIPProbe({ request = probeHTTPS, now = () => performanc
         if (error.rateLimited) retryAt.set(url, now() + 600000);
       }
     }
-    const rateLimited = EXIT_IP_URLS.every(url => now() < (retryAt.get(url) ?? 0));
+    const rateLimited = urls.every(url => now() < (retryAt.get(url) ?? 0));
     throw Object.assign(new Error(rateLimited ? '出口 IP 查询服务均不可用（限流，10分钟后重试）' : '出口 IP 查询服务均不可用'), { rateLimited });
   };
 }

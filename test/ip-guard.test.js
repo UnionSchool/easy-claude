@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { Guard, createExitIPProbe, EXIT_IP_URLS } from '../src/ip-guard/guard.js';
+import { Guard, createExitIPProbe, parseIPResponse, EXIT_IP_URLS } from '../src/ip-guard/guard.js';
 import { proxyEnvironment, runProtectedCode } from '../src/ip-guard/launcher.js';
 
 test('固定本机代理环境，只绕过本机地址且不修改原环境', () => {
@@ -51,24 +51,37 @@ test('周期复查成功续租不断连接，失败立即撤销旧放行', async
 });
 
 
-test('主源429切备用，主源冷却10分钟，之后恢复优先查询', async () => {
-  let clock = 0, primaryCalls = 0;
+test('解析 JSON、Cloudflare trace 及纯文本 IPv4 响应', () => {
+  assert.equal(parseIPResponse('{"ip":"203.0.113.1"}'), '203.0.113.1');
+  assert.equal(parseIPResponse('fl=123\nh=www.cloudflare.com\nip=203.0.113.2\nts=1\n'), '203.0.113.2');
+  assert.equal(parseIPResponse('203.0.113.3\n'), '203.0.113.3');
+  assert.throws(() => parseIPResponse(''));
+  assert.throws(() => parseIPResponse('not-an-ip'));
+});
+
+test('多源轮转探测：单源429冷却10分钟后恢复，期间自动跳过', async () => {
+  let clock = 0;
   const calls = [];
-  const probe = createExitIPProbe({ now: () => clock, request: async (url, options) => {
+  const urls = ['https://a.example/ip', 'https://b.example/ip', 'https://c.example/ip'];
+  const probe = createExitIPProbe({ urls, now: () => clock, request: async (url, options) => {
     calls.push(url);
-    assert.equal(options.family, 4); assert.equal(options.timeout, 5000);
-    if (url === EXIT_IP_URLS[0] && ++primaryCalls === 1) throw Object.assign(new Error('429'), { rateLimited: true });
+    assert.equal(options.family, 4); assert.equal(options.timeout, 4000);
+    if (url === urls[0] && clock < 600000) throw Object.assign(new Error('429'), { rateLimited: true });
     return '203.0.113.1';
   } });
   const signal = new AbortController().signal;
   assert.equal(await probe(signal), '203.0.113.1');
-  clock = 60000; await probe(signal);
-  assert.deepEqual(calls, [EXIT_IP_URLS[0], EXIT_IP_URLS[1], EXIT_IP_URLS[1]]);
-  clock = 600000; await probe(signal);
-  assert.equal(calls.at(-1), EXIT_IP_URLS[0]);
+  clock = 10000; assert.equal(await probe(signal), '203.0.113.1');
+  clock = 20000; assert.equal(await probe(signal), '203.0.113.1');
+  clock = 30000; assert.equal(await probe(signal), '203.0.113.1');
+  assert.deepEqual(calls, [urls[0], urls[1], urls[1], urls[2], urls[1]]);
+  clock = 600000;
+  // 下一轮起点为 urls[1]，再两轮回到 urls[0] 时冷却已结束。
+  await probe(signal); await probe(signal); await probe(signal);
+  assert.equal(calls.at(-1), urls[0]);
 });
 
-test('主源有效但不在白名单时不能用备用挑选可放通结果', async t => {
+test('任一源返回合法但不在白名单的IP时立即阻断，不能切其他源挑选放通结果', async t => {
   const calls = [];
   const probe = createExitIPProbe({ request: async url => {
     calls.push(url); return url === EXIT_IP_URLS[0] ? '198.51.100.9' : '203.0.113.1';
@@ -80,10 +93,10 @@ test('主源有效但不在白名单时不能用备用挑选可放通结果', as
   assert.deepEqual(calls, [EXIT_IP_URLS[0]]);
 });
 
-test('双源失败保持失败；取消后不得继续备用；非法IP不能作为结果', async () => {
+test('全部源失败保持失败；取消后不得继续备用；非法IP切下一源', async () => {
   let count = 0;
   const failed = createExitIPProbe({ request: async () => { count++; throw new Error('timeout'); } });
-  await assert.rejects(failed(new AbortController().signal), /均不可用/); assert.equal(count, 2);
+  await assert.rejects(failed(new AbortController().signal), /均不可用/); assert.equal(count, EXIT_IP_URLS.length);
   const controller = new AbortController(); count = 0;
   const canceled = createExitIPProbe({ request: async () => { count++; controller.abort(); throw new Error('aborted'); } });
   await assert.rejects(canceled(controller.signal)); assert.equal(count, 1);
@@ -92,7 +105,7 @@ test('双源失败保持失败；取消后不得继续备用；非法IP不能作
   assert.equal(await invalid(new AbortController().signal), '203.0.113.1'); assert.equal(count, 2);
 });
 
-test('双源429时冷却不追加请求，冷却结束才允许再试', async () => {
+test('全部源429时冷却不追加请求，冷却结束才允许再试', async () => {
   let count = 0, clock = 0;
   const limited = createExitIPProbe({ now: () => clock, request: async () => {
     count++; throw Object.assign(new Error('429'), { rateLimited: true });
@@ -100,12 +113,12 @@ test('双源429时冷却不追加请求，冷却结束才允许再试', async ()
   await assert.rejects(limited(new AbortController().signal), error => error.rateLimited === true);
   clock = 60000;
   await assert.rejects(limited(new AbortController().signal), error => error.rateLimited === true);
-  assert.equal(count, 2);
-  clock = 600000; await assert.rejects(limited(new AbortController().signal)); assert.equal(count, 4);
+  assert.equal(count, EXIT_IP_URLS.length);
+  clock = 600000; await assert.rejects(limited(new AbortController().signal)); assert.equal(count, EXIT_IP_URLS.length * 2);
 });
 
 
-test('保护检测主源超时或网络失败时切备用，备用成功仍须校验白名单', async t => {
+test('保护检测首源超时或网络失败时切备用，备用成功仍须校验白名单', async t => {
   for (const failure of ['检测超时', 'ECONNRESET']) {
     const calls = [];
     const probe = createExitIPProbe({ request: async url => {
@@ -116,7 +129,7 @@ test('保护检测主源超时或网络失败时切备用，备用成功仍须�
     const guard = new Guard({ allowed: ['203.0.113.1'], probe });
     t.after(() => guard.revoke()); guard.enable();
     assert.equal(await guard.verify(), false);
-    assert.deepEqual(calls, EXIT_IP_URLS);
+    assert.deepEqual(calls, [EXIT_IP_URLS[0], EXIT_IP_URLS[1]]);
     assert.equal(guard.lastIP, '198.51.100.9');
     assert.equal(guard.reason, '出口不在白名单');
     assert.equal(guard.usable(), false);

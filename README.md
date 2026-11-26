@@ -18,12 +18,13 @@ Below Local proxy, click green Start Claude proxy to back up and configure Deskt
 
 [Setup, proxy configuration and removal](docs/exit-ip-protection.md) · [Development verification](docs/版本/出口IP保护开发管理.md)
 
-## v1.3.2 release notes
+## v1.3.3 release notes
 
-- Increase each public IP query timeout to 20 seconds (10-second connection timeout, 30-second subprocess limit), then try ipify if ipinfo fails.
-- Preserve proxy routing, TLS/IP validation, unknown fallback city/time zone, and existing query intervals (geography every 300 seconds; protection defaults to 60 seconds).
+- Rotate exit IP protection checks across four IPv4 endpoints (`www.cloudflare.com/cdn-cgi/trace`, `ipv4.icanhazip.com`, `checkip.amazonaws.com`, `api.ipify.org`) with 4-second per-source timeouts and per-source 10-minute 429 cooldowns; any valid non-allowlisted IP still blocks immediately.
+- Add shorter protection check intervals (`10s / 15s / 30s / 60s`, default `15s`) and lower the minimum recheck cooldown from 60 seconds to 3 seconds.
+- Ignore initial/unchanged `NWPathMonitor` callbacks with 300ms debounce to avoid self-revoking checks at startup or on minor route jitter; keep `ipinfo.io` for 300-second geography/time-zone lookups.
 
-[Release history](CHANGELOG.md) · [1.3.2 verification](docs/版本/1.3.2开发管理.md)
+[Release history](CHANGELOG.md) · [1.3.3 verification](docs/版本/1.3.3开发管理.md)
 
 ## Install and run
 

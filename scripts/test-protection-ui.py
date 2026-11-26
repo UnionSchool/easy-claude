@@ -11,11 +11,19 @@ entry = r'''
  @MainActor static func main() throws {
   _ = NSApplication.shared
   NSApp.setActivationPolicy(.prohibited)
-  UserDefaults.standard.set(30, forKey:"ipProtectionInterval")
+  UserDefaults.standard.set(5, forKey:"ipProtectionInterval")
   let owner = Overlay()
-  precondition(owner.protectionInterval == 60)
+  precondition(owner.protectionInterval == 15)
   owner.protectionConfigurationChanged()
-  precondition(UserDefaults.standard.integer(forKey:"ipProtectionInterval") == 60)
+  precondition(UserDefaults.standard.integer(forKey:"ipProtectionInterval") == 15)
+  // 首次和相同网络路径签名不触发防抖重检
+  owner.handleNetworkPathUpdate("satisfied|wifi:en0")
+  precondition(owner.networkChangeTimer == nil)
+  owner.handleNetworkPathUpdate("satisfied|wifi:en0")
+  precondition(owner.networkChangeTimer == nil)
+  owner.handleNetworkPathUpdate("satisfied|wiredEthernet:en1")
+  precondition(owner.networkChangeTimer != nil)
+  owner.networkChangeTimer?.invalidate(); owner.networkChangeTimer = nil
   owner.node = CommandLine.arguments[1]; owner.script = CommandLine.arguments[2]
   owner.searchPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
   let front = NSWorkspace.shared.frontmostApplication?.processIdentifier

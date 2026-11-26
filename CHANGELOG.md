@@ -1,5 +1,11 @@
 # 更新记录
 
+## 1.3.3
+
+- Expand exit IP protection probes to four rotating IPv4-only endpoints (`www.cloudflare.com/cdn-cgi/trace`, `ipv4.icanhazip.com`, `checkip.amazonaws.com`, `api.ipify.org`) with 4-second per-source timeout and independent 10-minute 429 cooldowns; any valid non-allowlisted IP still blocks immediately without failing over.
+- Support shorter protection check intervals (`10s / 15s / 30s / 60s`, default `15s`) and reduce the minimum recheck cooldown from 60 seconds to 3 seconds.
+- Filter initial and duplicate `NWPathMonitor` callbacks with 300ms debounce so startup or minor route jitter no longer revokes an active IP check; show a dedicated waiting-to-recheck state during cooldown.
+
 ## 1.3.2
 
 - Increase public IP query timeouts to 10-second connect, 20-second total, and 30-second subprocess limit; keep ipinfo-to-ipify fallback, proxy routing, TLS/IP validation, and unknown fallback city/time zone.

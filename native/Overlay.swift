@@ -744,7 +744,7 @@ struct ControlPanelView: View {
                     Text(L("复查间隔", "Check interval"))
                     Spacer()
                     Picker("", selection: $owner.protectionInterval) {
-                        ForEach([60, 120, 300], id: \.self) { value in Text("\(value)s").tag(value) }
+                        ForEach([10, 15, 30, 60], id: \.self) { value in Text("\(value)s").tag(value) }
                     }.labelsHidden().frame(width: 85)
                         .onChange(of: owner.protectionInterval) { _, _ in owner.protectionConfigurationChanged() }
                 }.font(.system(size: 11)).controlSize(.small)
@@ -948,7 +948,9 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         guard protectionError == nil, let report = protectionReport else { return L("IP 未知", "IP unknown") }
         // 保护检测是地址展示的唯一来源，独立地理查询不能覆盖它。
         if let ip = report.ip, report.state == "allowed" || (report.state == "blocked" && report.reason == "出口不在白名单") { return ip }
-        return report.state == "checking" ? L("正在检测…", "Checking…") : L("IP 未知", "IP unknown")
+        if report.state == "checking" { return L("正在检测…", "Checking…") }
+        if report.reason?.contains("最小查询间隔") == true { return L("等待重查…", "Waiting to recheck…") }
+        return L("IP 未知", "IP unknown")
     }
     var allowedIPSummary: String {
         let values = protectionIPs.components(separatedBy: CharacterSet(charactersIn: ",，\n ")).filter { !$0.isEmpty }
@@ -966,7 +968,12 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     @Published var protectionEnabled = UserDefaults.standard.bool(forKey: "ipProtectionEnabled")
     @Published var protectionIPs = UserDefaults.standard.string(forKey: "ipProtectionAddresses") ?? ""
-    @Published var protectionInterval = max(60, UserDefaults.standard.object(forKey: "ipProtectionInterval") as? Int ?? 60)
+    @Published var protectionInterval: Int = {
+        let saved = UserDefaults.standard.object(forKey: "ipProtectionInterval") as? Int
+        if let saved, [10, 15, 30, 60].contains(saved) { return saved }
+        if let saved, saved > 60 { return 60 }
+        return 15
+    }()
     @Published var protectionReport: ProtectionReport?
     @Published var protectionError: String?
     var protectionProcess: Process?
@@ -974,6 +981,8 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     var protectionOutput: FileHandle?
     var protectionBuffer = Data()
     var protectionEditTimer: Timer?
+    var networkChangeTimer: Timer?
+    var lastNetworkPathSignature: String?
     var protectionHeartbeat: TimeInterval = 0
     let protectionPathMonitor = NWPathMonitor()
     var protectionStateText: String {
@@ -1054,8 +1063,8 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         node = args[1]; script = args[2]; searchPath = args[3]
         claudeHome = args.count > 4 ? args[4] : ""
         let prefs = UserDefaults.standard
-        if let previous = prefs.object(forKey: "ipProtectionInterval") as? Int, previous < 60 {
-            prefs.set(60, forKey: "ipProtectionInterval")
+        if let previous = prefs.object(forKey: "ipProtectionInterval") as? Int, ![10, 15, 30, 60].contains(previous) {
+            prefs.set(previous > 60 ? 60 : 15, forKey: "ipProtectionInterval")
         }
         if prefs.object(forKey: "leftInset") != nil {
             inset = CGPoint(x: prefs.double(forKey: "leftInset"), y: prefs.double(forKey: "bottomInset"))
@@ -1122,8 +1131,10 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         if let timer { RunLoop.main.add(timer, forMode: .common) }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(hide), name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(protectionNetworkChanged), name: NSWorkspace.didWakeNotification, object: nil)
-        protectionPathMonitor.pathUpdateHandler = { [weak self] _ in
-            Task { @MainActor in self?.protectionNetworkChanged() }
+        protectionPathMonitor.pathUpdateHandler = { [weak self] path in
+            let interfaces = path.availableInterfaces.map { "\($0.type):\($0.name)" }.sorted().joined(separator: ",")
+            let signature = "\(path.status)|\(interfaces)"
+            Task { @MainActor in self?.handleNetworkPathUpdate(signature) }
         }
         protectionPathMonitor.start(queue: DispatchQueue(label: "easy-claude.network"))
         startProtectionService()
@@ -1163,6 +1174,16 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             var data = try JSONSerialization.data(withJSONObject: command); data.append(10)
             try input.write(contentsOf: data)
         } catch { protectionError = L("保护控制通信失败。", "Protection control connection failed."); protectionProcess?.terminate() }
+    }
+    func handleNetworkPathUpdate(_ signature: String) {
+        // 忽略启动时首次静态路径回调和无实际变化的抖动，避免刚发起的检测被自己撤销。
+        guard let previous = lastNetworkPathSignature else { lastNetworkPathSignature = signature; return }
+        guard signature != previous else { return }
+        lastNetworkPathSignature = signature
+        networkChangeTimer?.invalidate()
+        networkChangeTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.protectionNetworkChanged() }
+        }
     }
     @objc func protectionNetworkChanged() {
         if protectionEnabled { sendProtection(["action": "invalidate"]) }
@@ -1783,7 +1804,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) {
-        protectionEditTimer?.invalidate(); protectionPathMonitor.cancel()
+        protectionEditTimer?.invalidate(); networkChangeTimer?.invalidate(); protectionPathMonitor.cancel()
         protectionOutput?.readabilityHandler = nil
         try? protectionInput?.close()
         ipQuery?.terminate()

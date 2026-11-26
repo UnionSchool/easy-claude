@@ -6,16 +6,18 @@ import { Guard, normalizeIP, createExitIPProbe } from './guard.js';
 import { createGateway } from './gateway.js';
 import { controlPath, DEFAULT_PROXY_PORT } from './launcher.js';
 
+export const MIN_CHECK_INTERVAL = 3000;
+
 export async function startService({ input = process.stdin, output = process.stdout, path = controlPath(), proxyPort = DEFAULT_PROXY_PORT,
   probe = createExitIPProbe(), now = () => performance.now(),
   heartbeatTimeout = 15000 } = {}) {
-  const guard = new Guard({ allowed: [], probe, ttl: 75000, timeout: 13000, cooldown: 600000, now });
+  const guard = new Guard({ allowed: [], probe, ttl: 25000, timeout: 13000, cooldown: 600000, now });
   // 服务一开始先阻断，收到界面配置前绝不接受转发。
   guard.enable();
   const gateway = createGateway(guard);
   await new Promise((resolve, reject) => { gateway.server.once('error', reject); gateway.server.listen(proxyPort, '127.0.0.1', resolve); });
   const port = gateway.server.address().port;
-  let fault = '', checkedAt = null, interval = 60000;
+  let fault = '', checkedAt = null, interval = 15000;
   let lastCheck = -Infinity, heartbeat = now(), stopped = false, holding = false, verification = 0, requested = false;
   const status = () => {
     const ready = guard.usable() && !fault;
@@ -27,8 +29,8 @@ export async function startService({ input = process.stdin, output = process.std
     if (!guard.enabled || stopped || holding) return;
     if (!keepLease) requested = true;
     if (guard.controller || now() < guard.retryAt) return;
-    if (now() - lastCheck < 60000) {
-      if (!keepLease) { guard.reason = '等待60秒最小查询间隔'; report(); }
+    if (now() - lastCheck < MIN_CHECK_INTERVAL) {
+      if (!keepLease) { guard.reason = '等待3秒最小查询间隔'; report(); }
       return;
     }
     requested = false;
@@ -82,8 +84,8 @@ export async function startService({ input = process.stdin, output = process.std
         if (!command.enabled) { holding = false; guard.disable(); fault = ''; report(); return; }
         const ips = command.ips.map(normalizeIP);
         if (!ips.length || ips.length > 20 || ips.some(ip => net.isIP(ip) !== 4)) throw new Error('请输入 IPv4 白名单；当前版本关闭 IPv6 转发');
-        if (!Number.isInteger(command.interval) || command.interval < 60 || command.interval > 300) throw new Error('复查间隔应为60至300秒');
-        guard.changeAllowed(ips); guard.ttl = command.interval * 1000 + 15000;
+        if (!Number.isInteger(command.interval) || command.interval < 10 || command.interval > 300) throw new Error('复查间隔应为10至300秒');
+        guard.changeAllowed(ips); guard.ttl = command.interval * 1000 + 10000;
         interval = command.interval * 1000; holding = false; guard.enable(); fault = ''; void verify();
       } else if (command.action === 'invalidate' || command.action === 'verify') {
         if (guard.enabled) { verification++; guard.revoke('网络变化或重新检测'); report(); void verify(); }
@@ -101,7 +103,7 @@ export async function startService({ input = process.stdin, output = process.std
     if (now() - heartbeat >= heartbeatTimeout) { void stop(); return; }
     const wasAllowed = guard.state === 'allowed'; guard.usable();
     if (wasAllowed && guard.state !== 'allowed') report();
-    if (guard.enabled && !fault && now() >= guard.retryAt && now() - lastCheck >= (requested ? 60000 : interval)) void verify(!requested);
+    if (guard.enabled && !fault && now() >= guard.retryAt && now() - lastCheck >= (requested ? MIN_CHECK_INTERVAL : interval)) void verify(!requested);
   }, 500);
   report();
   return { guard, port, status, stop, verify };
