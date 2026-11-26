@@ -1,5 +1,11 @@
 # 更新记录
 
+## 1.3.4
+
+- Reduce HTTP 429 rate limits by polling usage only while Claude is in the foreground, when opening the control panel, on initial startup without a snapshot, or when an availability alert is due; widen automatic intervals to 10 minutes normally and 3 minutes for due resets/alerts (stale threshold 20 minutes).
+- Pause automatic usage retries after `auth_required` / `auth_expired` until manual recheck; respect numeric `Retry-After` headers on HTTP 429 as a cooldown floor.
+- Gate usage queries with Exit IP protection: pause usage requests while protection is enabled and blocking, and route allowed usage queries through `http://127.0.0.1:18197`.
+
 ## 1.3.3
 
 - Expand exit IP protection probes to four rotating IPv4-only endpoints (`www.cloudflare.com/cdn-cgi/trace`, `ipv4.icanhazip.com`, `checkip.amazonaws.com`, `api.ipify.org`) with 4-second per-source timeout and independent 10-minute 429 cooldowns; any valid non-allowlisted IP still blocks immediately without failing over.

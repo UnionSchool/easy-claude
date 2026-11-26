@@ -148,10 +148,12 @@ struct UsageRefreshSchedule {
     var rateLimitCount = 0
     var nextAllowedAt: Double = 0
     func allows(_ now: Double) -> Bool { now >= nextAllowedAt }
-    mutating func receive(rateLimited: Bool, succeeded: Bool, now: Double) {
+    mutating func receive(rateLimited: Bool, succeeded: Bool, now: Double, retryAfter: Double? = nil) {
         if rateLimited {
             rateLimitCount = min(rateLimitCount + 1, 2)
-            nextAllowedAt = now + min(900, usageRateLimitBase * pow(2, Double(rateLimitCount)))
+            let backoff = min(900, usageRateLimitBase * pow(2, Double(rateLimitCount)))
+            let serverDelay = retryAfter.flatMap { $0.isFinite && $0 >= 60 ? min(3600, $0) : nil } ?? 0
+            nextAllowedAt = now + max(backoff, serverDelay)
         } else if succeeded {
             rateLimitCount = 0
             nextAllowedAt = 0
@@ -173,8 +175,9 @@ struct Snapshot: Decodable {
     var restricted: Bool = false
     var error: String?
     var errorCode: String?
+    var retryAfter: Double?
 
-    enum CodingKeys: CodingKey { case windows, detail, fetchedAt, restricted, error, errorCode }
+    enum CodingKeys: CodingKey { case windows, detail, fetchedAt, restricted, error, errorCode, retryAfter }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         windows = try c.decodeIfPresent([UsageWindow].self, forKey: .windows) ?? []
@@ -183,6 +186,7 @@ struct Snapshot: Decodable {
         restricted = try c.decodeIfPresent(Bool.self, forKey: .restricted) ?? false
         error = try c.decodeIfPresent(String.self, forKey: .error)
         errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
+        retryAfter = try c.decodeIfPresent(Double.self, forKey: .retryAfter)
     }
 }
 
@@ -523,7 +527,9 @@ let controlProduct = "Claude"
 let controlLoginName = "Claude Code"
 let controlLoginCommand = "claude auth login"
 let usageRateLimitBase: TimeInterval = 300
-let controlStaleSeconds: Double = 600
+let usageRefreshInterval: TimeInterval = 600
+let usageDueRefreshInterval: TimeInterval = 180
+let controlStaleSeconds: Double = 1200
 func controlQuotas(_ windows: [UsageWindow]) -> [ControlQuota] { return [windows.first { $0.id == "five_hour:primary" }.map { ControlQuota(window: $0, weekly: false) }, windows.first { $0.id == "seven_day:primary" }.map { ControlQuota(window: $0, weekly: true) }].compactMap { $0 } }
 
 struct ControlQuota: Identifiable {
@@ -1299,6 +1305,20 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         resizeControls()
         NSApp.activate(ignoringOtherApps: true)
         controlPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if automaticUsageRefresh { maybeAutoRefreshUsage(foreground: true) }
+    }
+    func maybeAutoRefreshUsage(foreground: Bool) {
+        guard automaticUsageRefresh else { return }
+        guard !["auth_required", "auth_expired"].contains(controlErrorCode ?? "") else { return }
+        guard !protectionEnabled || protectionIsAllowed else { return }
+        let now = Date().timeIntervalSince1970
+        let resetDue = snapshot?.windows.contains { $0.resetsAt.map { $0 <= now } ?? false } ?? false
+        let reminderDue = reminder.map { $0.due <= now } ?? false
+        // 仅在 Claude 前台、面板打开、提醒到点或首次缺少快照时自动查询，避免后台空转触发 429。
+        guard foreground || controlPopover.isShown || reminderDue || (snapshot == nil && error == nil) else { return }
+        if Date().timeIntervalSince(lastAttempt) >= (resetDue || reminderDue ? usageDueRefreshInterval : usageRefreshInterval) {
+            refresh()
+        }
     }
     @objc func hide() { panel.orderOut(nil); clockPanel.orderOut(nil) }
     @objc func tick() {
@@ -1307,14 +1327,10 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         }
         checkVersionIfNeeded()
         if Date().timeIntervalSince(ipLastAttempt) >= 300 { refreshIP() }
-        if automaticUsageRefresh {
-            let now = Date().timeIntervalSince1970
-            let resetDue = snapshot?.windows.contains { $0.resetsAt.map { $0 <= now } ?? false } ?? false
-            let reminderDue = reminder.map { $0.due <= now } ?? false
-            if Date().timeIntervalSince(lastAttempt) >= (resetDue || reminderDue ? 60 : 300) { refresh() }
-        }
+        let rect = targetWindow()
+        maybeAutoRefreshUsage(foreground: rect != nil)
         refreshControls()
-        guard let rect = targetWindow() else { hide(); lastRect = nil; return }
+        guard let rect else { hide(); lastRect = nil; return }
         lastRect = rect
         if clockEnabled {
             if !clock.dragging {
@@ -1336,7 +1352,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         let weekly = windows.first { $0.id == "seven_day:primary" }
         let fiveHour = windows.first { $0.id == "five_hour:primary" }
         let now = Date().timeIntervalSince1970
-        let snapshotStale = error != nil || snapshot == nil || now - (snapshot?.fetchedAt ?? 0) > 600
+        let snapshotStale = error != nil || snapshot == nil || now - (snapshot?.fetchedAt ?? 0) > controlStaleSeconds
         func stale(_ window: UsageWindow?) -> Bool {
             snapshotStale || window?.remaining == nil || (window?.resetsAt.map { $0 <= now } ?? false)
         }
@@ -1367,6 +1383,13 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
     }
     @objc func refresh() {
         guard query == nil, usageSchedule.allows(Date().timeIntervalSince1970) else { return }
+        if protectionEnabled && !protectionIsAllowed {
+            error = L("出口 IP 保护未放通，已暂停额度查询", "Exit IP protection is blocking requests; usage query paused")
+            controlErrorCode = nil
+            refreshControls()
+            updateRing()
+            return
+        }
         lastAttempt = Date()
         let process = Process(), pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: node)
@@ -1375,6 +1398,10 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
         env["PATH"] = searchPath
         env["EASY_LANGUAGE"] = AppLanguage.current.rawValue
         if !claudeHome.isEmpty { env["CLAUDE_CONFIG_DIR"] = claudeHome }
+        if protectionEnabled && protectionIsAllowed {
+            let proxy = "http://127.0.0.1:18197"
+            for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"] { env[key] = proxy }
+        }
         process.environment = env
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -1387,7 +1414,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
                     let value = try JSONDecoder().decode(Snapshot.self, from: data)
                     self.usageSchedule.receive(rateLimited: value.errorCode == "rate_limited" && value.error != nil,
                         succeeded: value.error == nil && process.terminationStatus == 0 && value.fetchedAt > 0,
-                        now: Date().timeIntervalSince1970)
+                        now: Date().timeIntervalSince1970, retryAfter: value.retryAfter)
                     if let message = value.error { self.error = message; self.controlErrorCode = value.errorCode }
                     else if process.terminationStatus == 0, value.fetchedAt > 0 {
                         self.snapshot = value; self.error = nil; self.controlErrorCode = nil
@@ -1464,7 +1491,7 @@ final class Overlay: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNoti
             return
         }
         let now = Date().timeIntervalSince1970
-        guard error == nil, let snapshot, now - snapshot.fetchedAt <= 600,
+        guard error == nil, let snapshot, now - snapshot.fetchedAt <= controlStaleSeconds,
               let candidate = AvailabilityReminder.arm(reminderWindows(snapshot.windows), now: now) else {
             reminderError = L("当前额度可用，或缺少有效额度/重置时间；请刷新后重试", "Usage is available, or usage/reset data is missing. Refresh and try again.")
             refresh(); return

@@ -65,7 +65,12 @@ export async function readUsage({ signal, timeoutMs = 15000, getToken = loadToke
     }).catch(() => { throw new Error(L('无法连接 Claude 额度服务，请检查网络。', 'Cannot connect to Claude usage service. Check the network.')); });
     if (response.status === 401) throw Object.assign(new Error(L(`订阅登录已失效（HTTP 401）。${loginMessage}`, `Subscription login expired (HTTP 401). ${loginMessage}`)), { code: 'auth_expired' });
     if (response.status === 403) throw new Error(L('Claude 官方额度服务拒绝访问（HTTP 403）。可能是账号权限、网络访问限制或接口兼容变化；请先检查 Claude Code 的 /usage，不能仅据此判断登录已过期。', 'Claude usage service denied access (HTTP 403). Check account permissions, network access and Claude Code /usage; this does not necessarily mean an expired login.'));
-    if (response.status === 429) throw Object.assign(new Error(L('额度查询过于频繁，请稍后再试。', 'Too many usage requests. Try again later.')), { code: 'rate_limited' });
+    if (response.status === 429) {
+      const header = response.headers?.get?.('retry-after')?.trim();
+      const parsed = header && /^\d+$/.test(header) ? Number(header) : null;
+      const retryAfter = Number.isFinite(parsed) && parsed > 0 ? Math.min(3600, parsed) : undefined;
+      throw Object.assign(new Error(L('额度查询过于频繁，请稍后再试。', 'Too many usage requests. Try again later.')), { code: 'rate_limited', ...(retryAfter ? { retryAfter } : {}) });
+    }
     if (!response.ok) throw new Error(L(`Claude 额度服务暂不可用（HTTP ${response.status}）。`, `Claude usage service unavailable (HTTP ${response.status}).`));
     let data;
     try { data = await response.json(); } catch { throw new Error(L('Claude 返回了无效的额度数据。', 'Claude returned invalid usage data.')); }

@@ -49,10 +49,10 @@ test('认证状态明确分类，403和网络错误不能冒充未登录', async
   }
 });
 
-test('429保留结构化限流状态，不读取错误正文或立即重试', async () => {
+test('429保留结构化限流状态，支持Retry-After且不读取错误正文或立即重试', async () => {
   let calls = 0;
   await assert.rejects(readUsage({ getToken: async () => 'fake', fetchImpl: async () => {
-    calls++; return { status:429, ok:false, json: () => { throw new Error('must not read body'); } };
-  } }), error => error.code === 'rate_limited');
+    calls++; return { status:429, ok:false, headers: new Headers({ 'retry-after': '1200' }), json: () => { throw new Error('must not read body'); } };
+  } }), error => error.code === 'rate_limited' && error.retryAfter === 1200);
   assert.equal(calls, 1);
 });

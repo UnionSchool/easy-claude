@@ -26,6 +26,8 @@ export function overlayData(result, now = Date.now()) {
 }
 
 export function overlayError(error) {
+  const retryAfter = Number.isFinite(error?.retryAfter) && error.retryAfter > 0 ? Math.min(3600, Math.ceil(error.retryAfter)) : undefined;
   return { error: error?.message || L('额度查询失败', 'Usage query failed'),
-    errorCode: ['auth_required','auth_expired','rate_limited'].includes(error?.code) ? error.code : 'query_failed' };
+    errorCode: ['auth_required','auth_expired','rate_limited'].includes(error?.code) ? error.code : 'query_failed',
+    ...(retryAfter ? { retryAfter } : {}) };
 }

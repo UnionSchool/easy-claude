@@ -16,6 +16,9 @@ entry = r'''
   precondition(schedule.rateLimitCount == 2)
   schedule.receive(rateLimited:false,succeeded:true,now:3000)
   precondition(schedule.rateLimitCount == 0 && schedule.allows(3000))
+  schedule.receive(rateLimited:true,succeeded:false,now:4000,retryAfter:1200)
+  precondition(schedule.nextAllowedAt == 5200)
+  schedule.receive(rateLimited:false,succeeded:true,now:6000)
   let owner = Overlay()
   owner.node = CommandLine.arguments[1]; owner.script = CommandLine.arguments[2]
   owner.searchPath = ProcessInfo.processInfo.environment["PATH"] ?? ""

@@ -20,14 +20,14 @@ entry=r'''
   owner.snapshot=try JSONDecoder().decode(Snapshot.self,from:data)
   let row=owner.snapshot!.windows[0]
   let front=NSWorkspace.shared.frontmostApplication?.processIdentifier
-  func check(_ elapsed:Double, due:Bool, shouldQuery:Bool, reminder:Bool=false) {
+  func check(_ elapsed:Double, due:Bool, shouldQuery:Bool, reminder:Bool=false, foreground:Bool=false) {
    var changed=raw;changed["resetsAt"]=due ? now-1 : now+3600
    var sample=payload;sample["windows"]=[changed]
    owner.snapshot=try! JSONDecoder().decode(Snapshot.self,from:JSONSerialization.data(withJSONObject:sample))
    owner.reminder=reminder ? AvailabilityReminder(ids:[row.id],due:now-1) : nil
    owner.lastAttempt=Date().addingTimeInterval(-elapsed)
    let before=owner.lastAttempt
-   owner.tick()
+   if foreground { owner.maybeAutoRefreshUsage(foreground: true) } else { owner.tick() }
    precondition((owner.query != nil) == shouldQuery)
    if !shouldQuery {precondition(owner.lastAttempt == before)}
    let deadline=Date().addingTimeInterval(5)
@@ -35,22 +35,38 @@ entry=r'''
    precondition(owner.query == nil)
    precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier == front)
   }
-  check(299,due:false,shouldQuery:false)
-  check(301,due:false,shouldQuery:false)
-  check(59,due:true,shouldQuery:false)
-  check(61,due:true,shouldQuery:false)
-  check(59,due:false,shouldQuery:false,reminder:true)
-  check(61,due:false,shouldQuery:false,reminder:true)
+  check(599,due:false,shouldQuery:false,foreground:true)
+  check(601,due:false,shouldQuery:false,foreground:true)
+  check(179,due:true,shouldQuery:false,foreground:true)
+  check(181,due:true,shouldQuery:false,foreground:true)
+  check(179,due:false,shouldQuery:false,reminder:true)
+  check(181,due:false,shouldQuery:false,reminder:true)
   check(86400,due:true,shouldQuery:false,reminder:true)
   owner.automaticUsageRefresh=true
-  check(299,due:false,shouldQuery:false)
-  check(301,due:false,shouldQuery:true)
-  check(59,due:true,shouldQuery:false)
-  check(61,due:true,shouldQuery:true)
-  check(59,due:false,shouldQuery:false,reminder:true)
-  check(61,due:false,shouldQuery:true,reminder:true)
+  // 后台无前台窗口且已有快照时不空转，仅提醒到点允许后台确认。
+  check(601,due:false,shouldQuery:false)
+  check(181,due:true,shouldQuery:false)
+  check(179,due:false,shouldQuery:false,reminder:true)
+  check(181,due:false,shouldQuery:true,reminder:true)
+  // 前台活跃时按 600s 正常 / 180s 到期确认轮询。
+  check(599,due:false,shouldQuery:false,foreground:true)
+  check(601,due:false,shouldQuery:true,foreground:true)
+  check(179,due:true,shouldQuery:false,foreground:true)
+  check(181,due:true,shouldQuery:true,foreground:true)
+  // 登录失效后停止自动轮询。
+  owner.controlErrorCode="auth_expired"
+  check(86400,due:true,shouldQuery:false,foreground:true)
+  owner.controlErrorCode=nil
+  // 开启出口 IP 保护且未放通时拦截自动与手动额度查询。
+  owner.protectionEnabled=true
+  owner.protectionReport=nil
+  check(86400,due:true,shouldQuery:false,foreground:true)
+  owner.refresh()
+  precondition(owner.query == nil && owner.error != nil)
+  owner.protectionEnabled=false
+  owner.error=nil
   owner.usageSchedule.nextAllowedAt=now+900
-  check(86400,due:true,shouldQuery:false)
+  check(86400,due:true,shouldQuery:false,foreground:true)
   owner.usageSchedule.nextAllowedAt=0
   owner.automaticUsageRefresh=false
   owner.reminder=nil
@@ -60,12 +76,12 @@ entry=r'''
   while owner.query != nil && Date()<manualDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
   precondition(owner.query == nil)
   owner.reminder=nil;owner.snapshot!.windows=[row]
-  owner.snapshot!.fetchedAt=Date().timeIntervalSince1970-599
+  owner.snapshot!.fetchedAt=Date().timeIntervalSince1970-1199
   owner.error=nil
   precondition(owner.currentControlState().mode == "ready")
-  owner.snapshot!.fetchedAt=Date().timeIntervalSince1970-601
+  owner.snapshot!.fetchedAt=Date().timeIntervalSince1970-1201
   precondition(owner.currentControlState().mode == "unknown")
-  print("PASS actual tick: off never polls, on 300/60s, cooldown, manual refresh, stale 599/601s; no foreground change")
+  print("PASS actual tick: off never polls, background idle skips, foreground 600/180s, auth/protection gates, cooldown, manual refresh, stale 1199/1201s; no foreground change")
  }
 }
 '''
